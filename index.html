@@ -1,0 +1,1925 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+  <title>V2X 자율관제 종합 모니터링 센터 - 가상지도 경로관제</title>
+  
+  <!-- Fonts & Material Symbols -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Noto+Sans+KR:wght@100..900&family=Space+Grotesk:wght@300..700&display=swap"/>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "surface-dim": "#0a0d14",
+            "surface-tint": "#00dbe9",
+            "background": "#080b11",
+            "on-background": "#dfe2f1",
+            "surface-container": "#141824",
+            "surface-variant": "#282d3c",
+            "surface-container-lowest": "#05070c",
+            "surface-container-low": "#10131d",
+            "primary-fixed-dim": "#00dbe9",
+            "outline": "#788796",
+            "secondary": "#ffb868",
+            "surface": "#080b11",
+            "error-container": "#5c0007",
+            "primary-container": "#00f0ff",
+            "on-surface-variant": "#a2b4c7",
+            "surface-container-highest": "#282d3c",
+            "error": "#ff4d4d",
+            "surface-container-high": "#1c2130",
+            "primary": "#00f0ff",
+            "on-surface": "#dfe2f1",
+            "success": "#26e07f"
+          },
+          borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", '2xl': "1rem", full: "9999px" },
+          spacing: { gutter: "0.75rem", "space-sm": "0.5rem", "space-xl": "1.75rem", margin: "1rem", "space-lg": "1.25rem", "space-xs": "0.25rem", "space-md": "0.75rem" },
+          fontFamily: {
+            "label-tactical": ["JetBrains Mono", "monospace"],
+            "headline-lg": ["Space Grotesk", "sans-serif"],
+            "headline-sm": ["Space Grotesk", "sans-serif"],
+            "telemetry-md": ["JetBrains Mono", "monospace"],
+            "telemetry-display": ["JetBrains Mono", "monospace"],
+            "body-sm": ["Noto Sans KR", "sans-serif"],
+            "body-md": ["Noto Sans KR", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+  
+  <style>
+    @layer base {
+      html, body { width: 100vw; height: 100%; margin: 0; padding: 0; background-color: #080b11; font-family: 'Noto Sans KR', sans-serif; color: #dfe2f1; overflow-x: hidden; }
+      body { overscroll-behavior: none; }
+      .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+      .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #282d3c; border-radius: 4px; }
+    ::-webkit-scrollbar-track { background: #080b11; }
+
+    /* Tactical glowing canvas background */
+    .virtual-map-bg {
+      background-color: #05070c;
+      background-image: 
+        radial-gradient(circle at 50% 50%, rgba(0, 240, 255, 0.05) 0%, transparent 70%),
+        linear-gradient(to right, rgba(40, 45, 60, 0.2) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(40, 45, 60, 0.2) 1px, transparent 1px);
+      background-size: 100% 100%, 30px 30px, 30px 30px;
+    }
+
+    /* Radar scanline visual */
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100%); }
+    }
+    .radar-sweep {
+      animation: scanline 8s linear infinite;
+    }
+
+    .glass-panel {
+      background: rgba(20, 24, 36, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(120, 135, 150, 0.25);
+    }
+
+    /* Target Node Blinking Animation */
+    @keyframes tacticalTargetBlink {
+      0%, 100% { opacity: 1; filter: brightness(1); }
+      50% { opacity: 0.1; filter: brightness(2) drop-shadow(0 0 12px #00f0ff); }
+    }
+    .gate-blink-anim {
+      animation: tacticalTargetBlink 0.3s ease-in-out 6;
+    }
+
+    /* Interactive 3D Canvas Drag styling */
+    .three-canvas-container {
+      cursor: grab;
+      touch-action: none;
+    }
+    .three-canvas-container:active {
+      cursor: grabbing;
+    }
+
+    /* Mobile Touch Layer Fix */
+    #virtual-map-container {
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .nav-item, button, [onclick] {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      cursor: pointer;
+    }
+  </style>
+
+  <!-- Three.js Library for 3D EV Parts Rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body class="bg-background text-on-surface flex flex-col min-h-screen selection:bg-primary-container selection:text-black">
+
+  <!-- Top Navigation Bar -->
+  <header class="fixed top-0 w-full z-40 bg-surface-container-lowest/95 backdrop-blur-xl pt-safe border-b border-surface-variant/40 shadow-lg">
+    <div class="h-14 px-margin flex items-center justify-between gap-space-sm max-w-7xl mx-auto">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-primary-container/20 via-surface-tint/30 to-primary-container flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(0,240,255,0.4)] border border-primary-container/50">
+          <span class="material-symbols-outlined text-black font-extrabold text-[22px]">hub</span>
+        </div>
+        <div class="flex flex-col min-w-0">
+          <h1 id="header-page-title" class="font-headline-sm text-[16px] sm:text-[18px] text-primary-container truncate font-bold tracking-wider">T2H</h1>
+        </div>
+      </div>
+
+      <!-- Regional Selector Global Buttons Header -->
+      <div class="flex items-center gap-2 shrink-0">
+        <div class="flex items-center bg-surface-container-high p-1 rounded-xl border border-surface-variant/60 gap-1 font-label-tactical text-[11px]">
+          <span class="text-outline text-[10px] px-1 hidden sm:inline">권역:</span>
+          <button onclick="changeRegion('busan')" id="hdr-btn-busan" class="hdr-region-btn px-2.5 py-1 rounded-lg bg-primary-container text-black font-bold transition-all">부산</button>
+          <button onclick="changeRegion('incheon')" id="hdr-btn-incheon" class="hdr-region-btn px-2.5 py-1 rounded-lg text-outline hover:text-on-surface transition-all">인천</button>
+          <button onclick="changeRegion('pyeongtaek')" id="hdr-btn-pyeongtaek" class="hdr-region-btn px-2.5 py-1 rounded-lg text-outline hover:text-on-surface transition-all">평택</button>
+        </div>
+        
+        <button onclick="triggerEmergencyModal()" aria-label="긴급 비상 중단" class="px-3 py-1.5 bg-error/20 hover:bg-error/30 text-error border border-error/60 rounded-xl font-label-tactical text-[11px] flex items-center gap-1.5 active:scale-95 transition-all shadow-[0_0_12px_rgba(255,77,77,0.3)]">
+          <span class="material-symbols-outlined text-[16px]">crisis_alert</span>
+          <span class="font-bold hidden sm:inline">E-Stop</span>
+        </button>
+
+        <button onclick="triggerFireSuppression()" aria-label="비상 화재 진압" class="px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border border-orange-500/60 rounded-xl font-label-tactical text-[11px] flex items-center gap-1.5 active:scale-95 transition-all shadow-[0_0_12px_rgba(249,115,22,0.3)]">
+          <span class="material-symbols-outlined text-[16px]">local_fire_department</span>
+          <span class="font-bold hidden sm:inline">화재진압</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 flex flex-col relative w-full pt-14 pb-36 bg-background min-h-screen max-w-7xl mx-auto">
+    
+    <!-- PAGE 1: Real-time Route Control with Synthetic Map -->
+    <div id="page-1" class="page-view flex flex-col w-full px-margin py-space-md gap-space-md text-on-surface">
+      <!-- Top Telemetry Cards -->
+      <section class="grid grid-cols-2 md:grid-cols-4 gap-2.5 w-full">
+        <div class="bg-surface-container rounded-xl p-3 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div>
+            <span class="font-label-tactical text-[10px] text-outline block">현재 권역 운행 차량</span>
+            <span class="font-telemetry-display text-[22px] text-primary-container font-bold" id="stat-veh-count">3 대</span>
+            <span class="text-[9px] font-label-tactical text-outline block mt-0.5" id="stat-veh-desc">부산 권역 실시간 관제 중</span>
+          </div>
+          <div class="w-9 h-9 rounded-lg bg-primary-container/10 border border-primary-container/30 flex items-center justify-center text-primary-container">
+            <span class="material-symbols-outlined text-[22px]">local_shipping</span>
+          </div>
+        </div>
+        <div class="bg-surface-container rounded-xl p-3 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div>
+            <span class="font-label-tactical text-[10px] text-outline block">연동 게이트 수</span>
+            <span class="font-telemetry-display text-[22px] text-success font-bold" id="stat-gate-count">3 개소</span>
+            <span class="text-[9px] font-label-tactical text-success/80 block mt-0.5">V2I 스마트 게이트 동기화</span>
+          </div>
+          <div class="w-9 h-9 rounded-lg bg-success/10 border border-success/30 flex items-center justify-center text-success">
+            <span class="material-symbols-outlined text-[22px]">sensor_door</span>
+          </div>
+        </div>
+        <div class="bg-surface-container rounded-xl p-3 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div>
+            <span class="font-label-tactical text-[10px] text-outline block">일일 처리 오더</span>
+            <span class="font-telemetry-display text-[22px] text-secondary font-bold">142 건</span>
+            <span class="text-[9px] font-label-tactical text-secondary/80 block mt-0.5">TOS 시스템 연동 완료</span>
+          </div>
+          <div class="w-9 h-9 rounded-lg bg-secondary/10 border border-secondary/30 flex items-center justify-center text-secondary">
+            <span class="material-symbols-outlined text-[22px]">assignment</span>
+          </div>
+        </div>
+        <div class="bg-surface-container rounded-xl p-3 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div>
+            <span class="font-label-tactical text-[10px] text-outline block">가상지도 응답성</span>
+            <span class="font-telemetry-display text-[22px] text-success font-bold">60 FPS</span>
+            <span class="text-[9px] font-label-tactical text-success/80 block mt-0.5">V2X 초저지연 동기화</span>
+          </div>
+          <div class="w-9 h-9 rounded-lg bg-success/10 border border-success/30 flex items-center justify-center text-success">
+            <span class="material-symbols-outlined text-[22px]">polyline</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Synthetic / Virtual Map Container -->
+      <section class="bg-surface-container-low rounded-xl overflow-hidden shadow-2xl border border-surface-variant/60 flex flex-col relative">
+        
+        <!-- Virtual Map Toolbar Header -->
+        <div class="px-3.5 py-2.5 flex flex-wrap items-center justify-between bg-surface-container-high/90 backdrop-blur-md z-20 border-b border-surface-variant/40 gap-2">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary-container text-[20px]">alt_route</span>
+            <div>
+              <span id="map-region-title" class="font-headline-sm text-[14px] text-on-surface font-bold block">권역별 택티컬 가상 지도 관제</span>
+              <span class="text-[10px] font-label-tactical text-outline block" id="map-region-subtitle">V2I Gate Telematics & Autonomous Synthetic Route Map</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Virtual Interactive Canvas Wrapper -->
+        <div class="relative w-full h-[460px] sm:h-[500px] virtual-map-bg overflow-hidden cursor-grab active:cursor-grabbing select-none" id="virtual-map-container">
+          
+          <!-- Zoom Overlay Controls (+ / - / Reset) -->
+          <div class="absolute top-3 right-3 z-30 flex flex-col gap-1 font-label-tactical">
+            <button onclick="zoomVirtualMap(1.2)" title="확대" class="w-8 h-8 rounded-lg bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant text-on-surface flex items-center justify-center transition-all active:scale-95 shadow-lg">
+              <span class="material-symbols-outlined text-[18px]">add</span>
+            </button>
+            <button onclick="zoomVirtualMap(0.8)" title="축소" class="w-8 h-8 rounded-lg bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant text-on-surface flex items-center justify-center transition-all active:scale-95 shadow-lg">
+              <span class="material-symbols-outlined text-[18px]">remove</span>
+            </button>
+            <button onclick="resetVirtualMapZoom()" title="초기화" class="w-8 h-8 rounded-lg bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant text-on-surface flex items-center justify-center transition-all active:scale-95 shadow-lg">
+              <span class="material-symbols-outlined text-[16px]">restart_alt</span>
+            </button>
+          </div>
+
+          <!-- Scanline overlay -->
+          <div class="radar-sweep absolute inset-0 bg-gradient-to-b from-transparent via-primary-container/5 to-transparent pointer-events-none z-10" id="radar-overlay"></div>
+
+          <!-- SVG Canvas for Route Lines, Waypoints, Vehicles, and Gates -->
+          <svg id="virtual-map-svg" class="w-full h-full relative z-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <linearGradient id="routeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00f0ff" stop-opacity="0.8"/>
+                <stop offset="50%" stop-color="#00dbe9" stop-opacity="0.9"/>
+                <stop offset="100%" stop-color="#26e07f" stop-opacity="0.8"/>
+              </linearGradient>
+              <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+              </filter>
+            </defs>
+
+            <!-- Zoom/Pan Parent Wrapper Group -->
+            <g id="svg-zoom-content">
+              <g id="svg-grid-group"></g>
+              <g id="svg-routes-group"></g>
+              <g id="svg-gates-group"></g>
+              <g id="svg-vehicles-group"></g>
+            </g>
+          </svg>
+
+          <!-- Selected Object Telemetry Quick Card Overlay -->
+          <div id="map-telemetry-hud" class="absolute top-3 left-3 z-20 glass-panel p-3 rounded-xl max-w-[280px] w-full text-[11px] font-label-tactical hidden transition-all duration-300">
+            <div class="flex items-center justify-between border-b border-surface-variant/50 pb-1.5 mb-2">
+              <span class="text-primary-container font-bold flex items-center gap-1" id="hud-type-title">
+                <span class="material-symbols-outlined text-[16px]">sensors</span> V2I 실시간 연동
+              </span>
+              <button onclick="closeMapHud()" class="text-outline hover:text-white"><span class="material-symbols-outlined text-[14px]">close</span></button>
+            </div>
+            <div id="hud-content-body" class="space-y-1.5 text-on-surface">
+              <!-- HUD content injected dynamically -->
+            </div>
+          </div>
+
+          <!-- Bottom Floating Map Legend & Gate Fast Switcher -->
+      <div class="absolute bottom-3 left-3 right-3 z-20 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pointer-events-none">
+        <!-- Map Legend -->
+        <div class="glass-panel p-2.5 rounded-xl font-label-tactical text-[10px] flex items-center gap-3 flex-wrap pointer-events-auto">
+          <span class="text-primary-container font-bold">V2X 노드 범례:</span>
+          <span class="flex items-center gap-1.5"><span class="w-3 h-1 bg-primary-container rounded"></span><span class="text-outline">자율주행 가상 도로</span></span>
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-success border border-white shadow-[0_0_8px_#26e07f]"></span><span class="text-outline">V2I 무인게이트</span></span>
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-secondary"></span><span class="text-outline">물류 터미널</span></span>
+          <span class="flex items-center gap-1.5"><span class="material-symbols-outlined text-[14px] text-primary-container">local_shipping</span><span class="text-outline">운행 차량</span></span>
+        </div>
+
+        <!-- Gate Direct Access Quick Buttons -->
+        <div class="glass-panel p-2 rounded-xl font-label-tactical text-[10px] flex items-center gap-1.5 pointer-events-auto overflow-x-auto">
+          <span class="text-outline shrink-0 pl-1">게이트 빠른 선택:</span>
+          <div id="map-gate-quick-btns" class="flex items-center gap-1">
+            <!-- Dynamic gate buttons -->
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+      <!-- Regional Gate Status Section inside Page 1 -->
+      <section class="grid grid-cols-1 gap-3 mt-1 mb-28">
+        <div class="bg-surface-container rounded-xl p-3.5 border border-surface-variant/50 flex flex-col gap-2.5 shadow-md">
+          <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2">
+            <span class="font-headline-sm text-sm font-bold flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-success text-[18px]">sensor_door</span>
+              선택 권역 V2I 게이트 연동 목록
+            </span>
+            <button onclick="switchPage(2)" class="text-[10px] font-label-tactical text-primary-container hover:underline">상세보기 ➔</button>
+          </div>
+          <div class="flex flex-col gap-2" id="page1-gate-summary-list">
+            <!-- Dynamic Gate Items -->
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- PAGE 2: Unmanned V2I Gate Telematics -->
+    <div id="page-2" class="page-view hidden flex-col w-full px-margin py-space-md gap-space-md text-on-surface">
+      <div class="flex items-center justify-between border-b border-surface-variant/50 pb-2">
+        <div>
+          <h2 class="font-headline-sm text-lg font-bold">무인게이트 V2I 스마트 연동 현황</h2>
+          <p class="text-[11px] font-label-tactical text-outline mt-0.5">선택한 권역의 스마트 게이트 및 통과 차량 현황</p>
+        </div>
+        <span id="gate-region-badge" class="text-[10px] font-label-tactical bg-primary-container/10 text-primary-container px-2.5 py-1 rounded-lg border border-primary-container/30">부산 권역 게이트</span>
+      </div>
+      
+      <div id="gate-list-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <!-- Dynamic gates by region -->
+      </div>
+
+      <!-- Regional Vehicles in Gate view -->
+      <div class="mt-4 flex flex-col gap-2 mb-28">
+        <h3 class="font-headline-sm text-body-md font-bold text-on-surface">해당 권역 통과 대상 차량</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="gate-fleet-grid">
+          <!-- Dynamic fleet cards by region -->
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE 3: TOS Order & Dispatch Queue -->
+    <div id="page-3" class="page-view hidden flex-col w-full px-margin py-space-md gap-space-md text-on-surface">
+      <div class="flex items-center justify-between border-b border-surface-variant/50 pb-2">
+        <div>
+          <h2 class="font-headline-sm text-lg font-bold">TOS 연동 실시간 배차 큐</h2>
+          <p class="text-[11px] font-label-tactical text-outline mt-0.5">선택 권역의 배차 오더 현황 및 운행 차량</p>
+        </div>
+        <button onclick="syncTosQueue()" class="bg-surface-container px-3 py-1.5 rounded-lg border border-primary-container/40 text-primary-container text-[11px] font-label-tactical hover:bg-surface-variant transition-colors flex items-center gap-1 active:scale-95">
+          <span class="material-symbols-outlined text-[14px]">sync</span> TOS 실시간 동기화
+        </button>
+      </div>
+
+      <div class="overflow-x-auto bg-surface-container rounded-xl border border-surface-variant/50 shadow-md">
+        <table class="w-full text-left font-label-tactical text-[11px] whitespace-nowrap">
+          <thead class="bg-surface-container-high text-outline uppercase">
+            <tr>
+              <th class="p-3 border-b border-surface-variant/50">오더 ID</th>
+              <th class="p-3 border-b border-surface-variant/50">출발 ➔ 목적지</th>
+              <th class="p-3 border-b border-surface-variant/50">화물 유형 & 중량</th>
+              <th class="p-3 border-b border-surface-variant/50">권장 차종</th>
+              <th class="p-3 border-b border-surface-variant/50">배정 차량</th>
+              <th class="p-3 border-b border-surface-variant/50">상태</th>
+            </tr>
+          </thead>
+          <tbody id="dispatch-table-body" class="divide-y divide-surface-variant/40">
+            <!-- Dynamic order rows per region -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Regional Vehicles in Dispatch view -->
+      <div class="mt-4 flex flex-col gap-2 mb-28">
+        <h3 class="font-headline-sm text-body-md font-bold text-on-surface">선택 권역 배차 차량 목록</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="dispatch-fleet-grid">
+          <!-- Dynamic fleet cards by region -->
+        </div>
+      </div>
+    </div>
+    
+    <!-- PAGE 4: Detailed EV Vehicle Diagnostics -->
+    <div id="page-4" class="page-view hidden flex-col w-full px-margin py-space-md gap-space-md text-on-surface">
+      <!-- Section Header -->
+      <div class="flex flex-col md:flex-row md:items-center justify-between bg-surface-container p-4 rounded-2xl border border-surface-variant/60 shadow-lg gap-3">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-xl bg-gradient-to-tr from-primary-container/20 to-primary-container/40 border border-primary-container flex items-center justify-center text-primary-container shadow-[0_0_12px_rgba(0,240,255,0.3)]">
+            <span class="material-symbols-outlined text-[26px]">electric_car</span>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="font-headline-sm text-base sm:text-lg font-bold">전기차 부속품 실시간 종합 진단</h2>
+              <span class="px-2 py-0.5 rounded text-[9px] font-label-tactical bg-success/20 text-success border border-success/40 font-bold animate-pulse">CAN-BUS LIVE</span>
+            </div>
+            <p class="text-[11px] font-label-tactical text-outline" id="diag-region-desc">부산 권역 소속 전기차 부품 및 배터리·타이어 텔레메트리 모니터링</p>
+          </div>
+        </div>
+
+        <!-- Diagnostic Selector Dropdown & Fire Suppression Button -->
+        <div class="flex flex-wrap items-center gap-2 font-label-tactical text-[11px]">
+          <span class="text-outline">진단 차량 선택:</span>
+          <select id="diag-vehicle-select" onchange="selectDiagnosticVehicle(this.value, false)" class="bg-surface-container-high text-primary-container font-bold px-3 py-1.5 rounded-xl border border-primary-container/40 focus:outline-none cursor-pointer">
+            <!-- Dynamic Options -->
+          </select>
+          <button onclick="triggerFireSuppression()" class="px-3 py-1.5 bg-error/20 hover:bg-error/30 text-error border border-error/60 rounded-xl font-bold flex items-center gap-1 active:scale-95 transition-all shadow-[0_0_10px_rgba(255,77,77,0.2)]">
+            <span class="material-symbols-outlined text-[16px]">local_fire_department</span>
+            <span>비상화재진압</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Real-Time EV Accessory Health Overview -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="bg-surface-container rounded-xl p-3.5 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div class="space-y-1">
+            <span class="font-label-tactical text-[10px] text-outline block">배터리 건강 상태 (SoH)</span>
+            <span class="font-telemetry-display text-2xl font-bold text-success" id="diag-card-soh">98.5%</span>
+            <span class="text-[9px] font-label-tactical text-success/80 block">잔여 가용 잔존 수명 양호</span>
+          </div>
+          <div class="w-10 h-10 rounded-xl bg-success/10 border border-success/30 flex items-center justify-center text-success">
+            <span class="material-symbols-outlined text-[24px]">battery_charging_full</span>
+          </div>
+        </div>
+
+        <div class="bg-surface-container rounded-xl p-3.5 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div class="space-y-1">
+            <span class="font-label-tactical text-[10px] text-outline block">팩 평균 온도</span>
+            <span class="font-telemetry-display text-2xl font-bold text-primary-container" id="diag-card-btemp">32.4°C</span>
+            <span class="text-[9px] font-label-tactical text-outline block" id="diag-card-btemp-status">수냉식 냉각계통 최적</span>
+          </div>
+          <div class="w-10 h-10 rounded-xl bg-primary-container/10 border border-primary-container/30 flex items-center justify-center text-primary-container">
+            <span class="material-symbols-outlined text-[24px]">thermostat</span>
+          </div>
+        </div>
+
+        <div class="bg-surface-container rounded-xl p-3.5 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div class="space-y-1">
+            <span class="font-label-tactical text-[10px] text-outline block">TPMS 평균 공기압</span>
+            <span class="font-telemetry-display text-2xl font-bold text-secondary" id="diag-card-tpms">36.5 PSI</span>
+            <span class="text-[9px] font-label-tactical text-secondary/80 block" id="diag-card-tire-status">4륜 접지 균형 정상</span>
+          </div>
+          <div class="w-10 h-10 rounded-xl bg-secondary/10 border border-secondary/30 flex items-center justify-center text-secondary">
+            <span class="material-symbols-outlined text-[24px]">tire_repair</span>
+          </div>
+        </div>
+
+        <div class="bg-surface-container rounded-xl p-3.5 border border-surface-variant/50 flex justify-between items-center shadow-md">
+          <div class="space-y-1">
+            <span class="font-label-tactical text-[10px] text-outline block">구동 모터 / 인버터</span>
+            <span class="font-telemetry-display text-2xl font-bold text-primary-container" id="diag-card-motor">48.2°C</span>
+            <span class="text-[9px] font-label-tactical text-success/80 block">출력 토크 변환 정상</span>
+          </div>
+          <div class="w-10 h-10 rounded-xl bg-primary-container/10 border border-primary-container/30 flex items-center justify-center text-primary-container">
+            <span class="material-symbols-outlined text-[24px]">bolt</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detailed EV Components Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-28">
+        <!-- 4-Wheel Tire Diagnostics -->
+        <div class="bg-surface-container rounded-2xl p-4 border border-surface-variant/50 flex flex-col gap-3 shadow-lg">
+          <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-secondary text-[22px]">tire_repair</span>
+              <h3 class="font-headline-sm text-sm font-bold">4륜 타이어 및 TPMS 상태</h3>
+            </div>
+            <button onclick="reset3DPartRotation('3d-tire-canvas')" class="text-[9px] font-label-tactical text-outline hover:text-primary-container flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[12px]">restart_alt</span> 리셋
+            </button>
+          </div>
+
+          <div class="relative w-full h-[160px] bg-surface-container-lowest/90 rounded-xl border border-secondary/30 overflow-hidden group select-none">
+            <div id="3d-tire-canvas" class="w-full h-full three-canvas-container"></div>
+            <div class="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded border border-secondary/40 text-[9px] font-label-tactical text-secondary flex items-center gap-1 pointer-events-none">
+              <span class="material-symbols-outlined text-[12px]">3d_rotation</span> 드래그하여 3D 돌려보기
+            </div>
+            <button onclick="open3DPartDetailModal('tire')" class="absolute top-2 right-2 px-2 py-0.5 bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant rounded text-[9px] font-label-tactical text-on-surface transition-all flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[12px]">open_in_full</span> 정밀분석
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 p-2 bg-surface-container-lowest/80 rounded-xl border border-surface-variant/40 relative">
+            <div class="bg-surface-container p-2.5 rounded-lg border border-primary-container/40 flex flex-col gap-1">
+              <div class="flex justify-between items-center">
+                <span class="font-label-tactical text-[10px] font-bold text-primary-container">전륜 좌측 (FL)</span>
+                <span class="text-[9px] font-label-tactical text-success font-bold" id="tire-fl-press">36.2 PSI</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] font-label-tactical">
+                <span class="text-outline">온도:</span>
+                <span class="text-on-surface font-semibold" id="tire-fl-temp">29°C</span>
+              </div>
+              <div class="space-y-0.5">
+                <div class="flex justify-between text-[9px] font-label-tactical"><span class="text-outline">트레드 잔여:</span><span class="text-primary-container" id="tire-fl-wear">88%</span></div>
+                <div class="w-full bg-surface-container-highest rounded-full h-1.5 overflow-hidden">
+                  <div id="tire-fl-bar" class="bg-primary-container h-full rounded-full" style="width: 88%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-surface-container p-2.5 rounded-lg border border-primary-container/40 flex flex-col gap-1">
+              <div class="flex justify-between items-center">
+                <span class="font-label-tactical text-[10px] font-bold text-primary-container">전륜 우측 (FR)</span>
+                <span class="text-[9px] font-label-tactical text-success font-bold" id="tire-fr-press">36.5 PSI</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] font-label-tactical">
+                <span class="text-outline">온도:</span>
+                <span class="text-on-surface font-semibold" id="tire-fr-temp">30°C</span>
+              </div>
+              <div class="space-y-0.5">
+                <div class="flex justify-between text-[9px] font-label-tactical"><span class="text-outline">트레드 잔여:</span><span class="text-primary-container" id="tire-fr-wear">87%</span></div>
+                <div class="w-full bg-surface-container-highest rounded-full h-1.5 overflow-hidden">
+                  <div id="tire-fr-bar" class="bg-primary-container h-full rounded-full" style="width: 87%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-surface-container p-2.5 rounded-lg border border-surface-variant/60 flex flex-col gap-1">
+              <div class="flex justify-between items-center">
+                <span class="font-label-tactical text-[10px] font-bold text-outline">후륜 좌측 (RL)</span>
+                <span class="text-[9px] font-label-tactical text-success font-bold" id="tire-rl-press">36.8 PSI</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] font-label-tactical">
+                <span class="text-outline">온도:</span>
+                <span class="text-on-surface font-semibold" id="tire-rl-temp">28°C</span>
+              </div>
+              <div class="space-y-0.5">
+                <div class="flex justify-between text-[9px] font-label-tactical"><span class="text-outline">트레드 잔여:</span><span class="text-primary-container" id="tire-rl-wear">91%</span></div>
+                <div class="w-full bg-surface-container-highest rounded-full h-1.5 overflow-hidden">
+                  <div id="tire-rl-bar" class="bg-primary-container h-full rounded-full" style="width: 91%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-surface-container p-2.5 rounded-lg border border-surface-variant/60 flex flex-col gap-1">
+              <div class="flex justify-between items-center">
+                <span class="font-label-tactical text-[10px] font-bold text-outline">후륜 우측 (RR)</span>
+                <span class="text-[9px] font-label-tactical text-success font-bold" id="tire-rr-press">36.4 PSI</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] font-label-tactical">
+                <span class="text-outline">온도:</span>
+                <span class="text-on-surface font-semibold" id="tire-rr-temp">29°C</span>
+              </div>
+              <div class="space-y-0.5">
+                <div class="flex justify-between text-[9px] font-label-tactical"><span class="text-outline">트레드 잔여:</span><span class="text-primary-container" id="tire-rr-wear">90%</span></div>
+                <div class="w-full bg-surface-container-highest rounded-full h-1.5 overflow-hidden">
+                  <div id="tire-rr-bar" class="bg-primary-container h-full rounded-full" style="width: 90%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-surface-container-high/60 p-2.5 rounded-xl border border-surface-variant/40 flex justify-between items-center text-[10px] font-label-tactical">
+            <span class="text-outline">휠 밸런스 / 얼라인먼트</span>
+            <span class="text-success font-bold flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-success"></span> 편마모 없음 (정상)</span>
+          </div>
+        </div>
+
+        <!-- High-Voltage Battery Module -->
+        <div class="bg-surface-container rounded-2xl p-4 border border-surface-variant/50 flex flex-col gap-3 shadow-lg">
+          <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary-container text-[22px]">battery_saver</span>
+              <h3 class="font-headline-sm text-sm font-bold">고전압 배터리 모듈 (BMS)</h3>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[9px] font-label-tactical text-primary-container font-bold" id="bms-pack-voltage">710V High-Volt</span>
+              <button onclick="reset3DPartRotation('3d-battery-canvas')" class="text-[9px] font-label-tactical text-outline hover:text-primary-container flex items-center gap-0.5">
+                <span class="material-symbols-outlined text-[12px]">restart_alt</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="relative w-full h-[160px] bg-surface-container-lowest/90 rounded-xl border border-primary-container/30 overflow-hidden group select-none">
+            <div id="3d-battery-canvas" class="w-full h-full three-canvas-container"></div>
+            <div class="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded border border-primary-container/40 text-[9px] font-label-tactical text-primary-container flex items-center gap-1 pointer-events-none">
+              <span class="material-symbols-outlined text-[12px]">3d_rotation</span> 드래그하여 3D 돌려보기
+            </div>
+            <button onclick="open3DPartDetailModal('battery')" class="absolute top-2 right-2 px-2 py-0.5 bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant rounded text-[9px] font-label-tactical text-on-surface transition-all flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[12px]">open_in_full</span> 정밀분석
+            </button>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex justify-between items-center text-[11px] font-label-tactical">
+              <span class="text-outline">배터리 모듈 셀 온도 밸런싱</span>
+              <span class="text-primary-container font-bold" id="bms-cell-dev">최대 편차: 1.8°C</span>
+            </div>
+            
+            <div class="grid grid-cols-4 gap-1.5 p-2.5 bg-surface-container-lowest rounded-xl border border-surface-variant/40">
+              <div class="bg-surface-container-high p-1.5 rounded text-center"><span class="text-[8px] text-outline block">M01</span><span class="text-[10px] font-label-tactical font-bold text-success" id="cell-m1">31.2°C</span></div>
+              <div class="bg-surface-container-high p-1.5 rounded text-center"><span class="text-[8px] text-outline block">M02</span><span class="text-[10px] font-label-tactical font-bold text-success" id="cell-m2">32.0°C</span></div>
+              <div class="bg-surface-container-high p-1.5 rounded text-center"><span class="text-[8px] text-outline block">M03</span><span class="text-[10px] font-label-tactical font-bold text-success" id="cell-m3">32.8°C</span></div>
+              <div class="bg-surface-container-high p-1.5 rounded text-center"><span class="text-[8px] text-outline block">M04</span><span class="text-[10px] font-label-tactical font-bold text-success" id="cell-m4">31.9°C</span></div>
+            </div>
+          </div>
+
+          <div class="space-y-2 font-label-tactical text-[10px]">
+            <div class="flex justify-between items-center bg-surface-container-high p-2 rounded-lg">
+              <span class="text-outline">절연 저항 값 (Insulation)</span>
+              <span class="text-success font-bold" id="bms-insulation">500 MΩ (정상)</span>
+            </div>
+            <div class="flex justify-between items-center bg-surface-container-high p-2 rounded-lg">
+              <span class="text-outline">누적 충방전 횟수 (Cycle)</span>
+              <span class="text-on-surface font-bold" id="bms-cycles">312 회</span>
+            </div>
+            <div class="flex justify-between items-center bg-surface-container-high p-2 rounded-lg">
+              <span class="text-outline">급속 충전 비율</span>
+              <span class="text-secondary font-bold" id="bms-fast-charge">24.5 %</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auxiliary Parts -->
+        <div class="bg-surface-container rounded-2xl p-4 border border-surface-variant/50 flex flex-col gap-3 shadow-lg">
+          <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary-container text-[22px]">tune</span>
+              <h3 class="font-headline-sm text-sm font-bold">주요 부속품 마모 & 유량</h3>
+            </div>
+            <button onclick="reset3DPartRotation('3d-aux-canvas')" class="text-[9px] font-label-tactical text-outline hover:text-primary-container flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[12px]">restart_alt</span> 리셋
+            </button>
+          </div>
+
+          <div class="relative w-full h-[160px] bg-surface-container-lowest/90 rounded-xl border border-success/30 overflow-hidden group select-none">
+            <div id="3d-aux-canvas" class="w-full h-full three-canvas-container"></div>
+            <div class="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded border border-success/40 text-[9px] font-label-tactical text-success flex items-center gap-1 pointer-events-none">
+              <span class="material-symbols-outlined text-[12px]">3d_rotation</span> 드래그하여 3D 돌려보기
+            </div>
+            <button onclick="open3DPartDetailModal('aux')" class="absolute top-2 right-2 px-2 py-0.5 bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant rounded text-[9px] font-label-tactical text-on-surface transition-all flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[12px]">open_in_full</span> 정밀분석
+            </button>
+          </div>
+
+          <div class="space-y-3 font-label-tactical text-[10px]">
+            <div class="space-y-1">
+              <div class="flex justify-between">
+                <span class="text-outline">전기차 전용 절연 냉각수 유량</span>
+                <span class="text-primary-container font-bold" id="acc-coolant">94% (정상)</span>
+              </div>
+              <div class="w-full bg-surface-container-highest rounded-full h-2 overflow-hidden">
+                <div id="acc-coolant-bar" class="bg-primary-container h-full rounded-full" style="width: 94%"></div>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between">
+                <span class="text-outline">회생제동 디스크 & 브레이크 패드</span>
+                <span class="text-success font-bold" id="acc-brake">잔여 85%</span>
+              </div>
+              <div class="w-full bg-surface-container-highest rounded-full h-2 overflow-hidden">
+                <div id="acc-brake-bar" class="bg-success h-full rounded-full" style="width: 85%"></div>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between">
+                <span class="text-outline">EPS 전동식 조향 모터 부하</span>
+                <span class="text-on-surface font-bold" id="acc-eps">12% (안정)</span>
+              </div>
+              <div class="w-full bg-surface-container-highest rounded-full h-2 overflow-hidden">
+                <div id="acc-eps-bar" class="bg-primary-container h-full rounded-full" style="width: 12%"></div>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between">
+                <span class="text-outline">하체 서스펜션 암 & 부싱 마모도</span>
+                <span class="text-secondary font-bold" id="acc-suspension">마모율 14%</span>
+              </div>
+              <div class="w-full bg-surface-container-highest rounded-full h-2 overflow-hidden">
+                <div id="acc-susp-bar" class="bg-secondary h-full rounded-full" style="width: 14%"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-2 font-label-tactical text-[10px]">
+            <button onclick="runComponentSelfTest()" class="w-full py-2.5 bg-primary-container/20 hover:bg-primary-container/30 text-primary-container border border-primary-container/50 rounded-xl font-bold transition-all active:scale-95 flex items-center justify-center gap-1">
+              <span class="material-symbols-outlined text-[16px]">flaky</span> 부품 자가진단 실행
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- 3D Component Detail Modal -->
+  <div id="part-3d-detail-modal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-margin hidden">
+    <div class="bg-surface-container-lowest border border-primary-container/50 rounded-2xl p-space-md max-w-lg w-full shadow-2xl flex flex-col gap-3">
+      <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2.5">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary-container text-[24px]" id="modal-part-icon">view_in_ar</span>
+          <div>
+            <h3 class="font-headline-sm text-body-md font-bold text-on-surface" id="modal-part-title">부품 3D 상세 정밀 진단</h3>
+            <span class="font-label-tactical text-[10px] text-outline" id="modal-part-subtitle">CAN-BUS Real-time Telemetry Analysis</span>
+          </div>
+        </div>
+        <button onclick="close3DPartDetailModal()" class="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center text-outline">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <div class="relative w-full h-[240px] bg-surface-container-low rounded-xl border border-surface-variant/60 overflow-hidden select-none">
+        <div id="3d-modal-canvas" class="w-full h-full three-canvas-container"></div>
+        <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/70 rounded text-[9px] font-label-tactical text-outline pointer-events-none flex items-center gap-1">
+          <span class="material-symbols-outlined text-[12px] text-primary-container">touch_app</span> 마우스/손가락 드래그로 360° 다각도 자유 회전
+        </div>
+        <button onclick="reset3DPartRotation('3d-modal-canvas')" class="absolute top-2 right-2 px-2 py-1 bg-surface-container-high/90 hover:bg-primary-container hover:text-black border border-surface-variant rounded text-[9px] font-label-tactical text-on-surface transition-all flex items-center gap-1">
+          <span class="material-symbols-outlined text-[12px]">restart_alt</span> 각도 초기화
+        </button>
+      </div>
+
+      <div id="modal-part-metrics" class="space-y-2 text-[11px] font-label-tactical">
+        <!-- Injected dynamically -->
+      </div>
+
+      <button onclick="close3DPartDetailModal()" class="w-full py-2.5 bg-primary-container hover:bg-surface-tint text-black font-bold rounded-xl text-[12px] active:scale-95 transition-all mt-1 shadow-lg">
+        확인 (닫기)
+      </button>
+    </div>
+  </div>
+
+  <!-- Gate Info Modal -->
+  <div id="gate-info-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-margin hidden">
+    <div class="bg-surface-container-lowest border border-primary-container/50 rounded-2xl p-space-md max-w-md w-full shadow-2xl flex flex-col gap-3">
+      <div class="flex items-center justify-between border-b border-surface-variant/40 pb-2.5">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary-container text-[24px]">sensor_door</span>
+          <div>
+            <h3 class="font-headline-sm text-body-md font-bold text-on-surface" id="modal-gate-title">GATE-01</h3>
+            <span class="font-label-tactical text-[10px] text-outline" id="modal-gate-location">위치</span>
+          </div>
+        </div>
+        <button onclick="closeGateInfoModal()" class="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center justify-center text-outline"><span class="material-symbols-outlined text-[18px]">close</span></button>
+      </div>
+      <div class="space-y-2 text-[11px] font-label-tactical">
+        <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">차단기 연동 상태:</span><span class="text-success font-bold" id="modal-gate-status">자동 개방 (Auto Gate Pass)</span></div>
+        <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">RFID / V2I 신호강도:</span><span class="text-primary-container font-bold">-42 dBm (우수)</span></div>
+        <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">V2X 통신 채널:</span><span class="text-on-surface font-bold">5.9 GHz WAVE Ch.172</span></div>
+      </div>
+      <div class="flex gap-2 mt-2">
+        <button onclick="handleGateAction('차단')" class="flex-1 py-2 bg-error text-white font-bold rounded-xl text-[12px] active:scale-95 transition-all shadow-lg">게이트 차단</button>
+        <button onclick="handleGateAction('개방')" class="flex-1 py-2 bg-success text-black font-bold rounded-xl text-[12px] active:scale-95 transition-all shadow-lg">게이트 개방</button>
+      </div>
+      <button onclick="closeGateInfoModal()" class="w-full py-2.5 bg-surface-container hover:bg-surface-variant text-on-surface font-bold rounded-xl text-[12px] active:scale-95 transition-all mt-1 shadow-lg border border-surface-variant/60">확인 (닫기)</button>
+    </div>
+  </div>
+
+  <!-- Tactical Toast Notification -->
+  <div class="fixed top-16 inset-x-4 sm:inset-x-auto sm:right-6 z-50 transform -translate-y-24 opacity-0 transition-all duration-300 pointer-events-none" id="tactical-toast">
+    <div class="bg-surface-container-highest text-on-surface px-space-md py-2.5 rounded-xl shadow-2xl border border-primary-container/40 flex items-center gap-2.5">
+      <span class="material-symbols-outlined text-primary-container text-[22px]" id="toast-icon">check_circle</span>
+      <div class="flex flex-col">
+        <span class="font-label-tactical text-[9px] text-primary-container font-bold uppercase" id="toast-tag">알림</span>
+        <span class="font-body-sm text-[12px] text-on-surface" id="toast-msg">메시지</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- E-Stop Emergency Modal -->
+  <div class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-margin hidden" id="e-stop-modal">
+    <div class="bg-surface-container-lowest border-2 border-error rounded-2xl p-space-md max-w-md w-full shadow-[0_0_50px_rgba(255,77,77,0.8)] flex flex-col gap-3 text-center">
+      <div class="w-14 h-14 rounded-full bg-error/20 border-2 border-error text-error flex items-center justify-center mx-auto animate-bounce"><span class="material-symbols-outlined text-[32px]">crisis_alert</span></div>
+      <div>
+        <h3 class="font-headline-lg text-headline-sm text-error font-extrabold">긴급 비상 정지 (E-STOP) 발령</h3>
+        <p class="font-body-md text-[12px] text-on-surface-variant mt-1">선택 권역 전 화물 차량에 Fail-Safe 하드웨어 유압 강제 제동을 실행합니다.</p>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button onclick="confirmEmergencyStop()" class="flex-1 py-3 bg-error text-white font-headline-sm text-[13px] rounded-xl font-bold active:scale-95 shadow-lg">제동 즉시 실행</button>
+        <button onclick="closeEmergencyModal()" class="px-4 py-3 bg-surface-container text-on-surface rounded-xl font-label-tactical text-[11px]">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Emergency Fire Suppression Modal -->
+  <div class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-margin hidden" id="fire-suppression-modal">
+    <div class="bg-surface-container-lowest border-2 border-error rounded-2xl p-space-md max-w-md w-full shadow-[0_0_50px_rgba(255,77,77,0.8)] flex flex-col gap-3 text-center">
+      <div class="w-14 h-14 rounded-full bg-error/20 border-2 border-error text-error flex items-center justify-center mx-auto animate-bounce">
+        <span class="material-symbols-outlined text-[32px]">local_fire_department</span>
+      </div>
+      <div>
+        <h3 class="font-headline-lg text-headline-sm text-error font-extrabold">비상 화재 진압 모드 작동</h3>
+        <p class="font-body-md text-[12px] text-on-surface-variant mt-1">
+          대상 차량: <span id="fire-target-veh" class="text-primary-container font-bold">FL-04</span><br>
+          고전압 배터리 전원 즉시 차단 및 차체 내부 소화 장치(In-Vehicle Fire Extinguisher)를 분사합니다.
+        </p>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button onclick="confirmFireSuppression()" class="flex-1 py-3 bg-error text-white font-headline-sm text-[13px] rounded-xl font-bold active:scale-95 shadow-lg">진압 명령 전송</button>
+        <button onclick="closeFireSuppressionModal()" class="px-4 py-3 bg-surface-container text-on-surface rounded-xl font-label-tactical text-[11px]">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Nav Tabs -->
+  <nav class="fixed bottom-0 w-full z-40 pb-safe bg-surface-container-lowest/95 backdrop-blur-xl border-t border-surface-variant/40 shadow-[0_-2px_16px_rgba(0,0,0,0.6)]">
+    <div class="flex justify-around items-center h-14 px-space-xs max-w-7xl mx-auto">
+      <button type="button" class="nav-item flex flex-col items-center justify-center gap-0.5 min-w-[4rem] h-11 text-primary-container font-bold transition-colors cursor-pointer active:opacity-75" onclick="switchPage(1)">
+        <span class="material-symbols-outlined text-[20px] pointer-events-none">alt_route</span>
+        <span class="font-label-tactical text-[10px] text-center leading-none pointer-events-none">경로관제</span>
+      </button>
+      <button type="button" class="nav-item flex flex-col items-center justify-center gap-0.5 min-w-[4rem] h-11 text-on-surface-variant transition-colors cursor-pointer active:opacity-75" onclick="switchPage(2)">
+        <span class="material-symbols-outlined text-[20px] pointer-events-none">sensor_door</span>
+        <span class="font-label-tactical text-[10px] text-center leading-none pointer-events-none">게이트현황</span>
+      </button>
+      <button type="button" class="nav-item flex flex-col items-center justify-center gap-0.5 min-w-[4rem] h-11 text-on-surface-variant transition-colors cursor-pointer active:opacity-75" onclick="switchPage(3)">
+        <span class="material-symbols-outlined text-[20px] pointer-events-none">list_alt</span>
+        <span class="font-label-tactical text-[10px] text-center leading-none pointer-events-none">오더배차</span>
+      </button>
+      <button type="button" class="nav-item flex flex-col items-center justify-center gap-0.5 min-w-[4rem] h-11 text-on-surface-variant transition-colors cursor-pointer active:opacity-75" onclick="switchPage(4)">
+        <span class="material-symbols-outlined text-[20px] pointer-events-none">build_circle</span>
+        <span class="font-label-tactical text-[10px] text-center leading-none pointer-events-none">차량진단</span>
+      </button>
+    </div>
+  </nav>
+
+  <script>
+    let currentRegion = 'busan';
+    let currentDiagVehicleId = 'FL-04';
+    let selectedMapNode = null;
+    let animFrameReq = null;
+
+    let mapZoomScale = 1;
+    let mapPanX = 0;
+    let mapPanY = 0;
+    let isMapPanning = false;
+    let mapPanStartX = 0;
+    let mapPanStartY = 0;
+
+    let threeScenes = {};
+
+    // Helper: Toast Notification
+    function showTacticalToast(msg, icon = 'check_circle') {
+      const toast = document.getElementById('tactical-toast');
+      const toastMsg = document.getElementById('toast-msg');
+      const toastIcon = document.getElementById('toast-icon');
+
+      if (!toast || !toastMsg || !toastIcon) return;
+
+      toastMsg.innerText = msg;
+      toastIcon.innerText = icon;
+
+      toast.classList.remove('-translate-y-24', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+
+      setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('-translate-y-24', 'opacity-0');
+      }, 2500);
+    }
+
+    function closeMapHud() {
+      const hud = document.getElementById('map-telemetry-hud');
+      if (hud) hud.classList.add('hidden');
+    }
+
+    function calculateVehicleSyntheticPos(progress, nodes) {
+      if (!nodes || nodes.length < 2) return { x: 100, y: 100 };
+      
+      const totalSegments = nodes.length - 1;
+      const scaled = progress * totalSegments;
+      const segIndex = Math.min(Math.floor(scaled), totalSegments - 1);
+      const segT = scaled - segIndex;
+
+      const n1 = nodes[segIndex];
+      const n2 = nodes[segIndex + 1];
+
+      return {
+        x: n1.x + (n2.x - n1.x) * segT,
+        y: n1.y + (n2.y - n1.y) * segT
+      };
+    }
+
+    const virtualRegionsData = {
+      'busan': {
+        name: '부산 권역',
+        title: '부산 항만 ➔ 양산 물류허브',
+        subtitle: '',
+        originName: '부산항 3부두 터미널',
+        destinationName: '양산 메인 물류허브',
+        nodes: [
+          { id: 'BUSAN_ORIGIN', name: '부산항 3부두 Terminal', x: 80, y: 380, type: 'origin' },
+          { id: 'WAY_B1', name: '부두 연결 고속화 도로', x: 180, y: 320, type: 'waypoint' },
+          { id: 'BG-01', name: '부산항 3부두 스마트 출구 게이트', x: 260, y: 280, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_B2', name: '부산-양산 V2I 스마트 고속도로', x: 420, y: 200, type: 'waypoint' },
+          { id: 'BG-02', name: '양산 고속도로 V2I 톨게이트', x: 580, y: 150, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_B3', name: '양산 IC 연결 인터체인지', x: 720, y: 120, type: 'waypoint' },
+          { id: 'BG-03', name: '양산 허브 메인 무인 게이트', x: 820, y: 90, type: 'gate', status: '대기중' },
+          { id: 'BUSAN_DEST', name: '양산 물류 허브', x: 920, y: 80, type: 'destination' }
+        ],
+        routes: [
+          ['BUSAN_ORIGIN', 'WAY_B1', 'BG-01', 'WAY_B2', 'BG-02', 'WAY_B3', 'BG-03', 'BUSAN_DEST']
+        ]
+      },
+      'incheon': {
+        name: '인천 권역',
+        title: '인천신항 ➔ 부천 물류단지',
+        subtitle: '',
+        originName: '인천신항 컨테이너 터미널',
+        destinationName: '부천 스마트 물류단지',
+        nodes: [
+          { id: 'INCHEON_ORIGIN', name: '인천신항 컨테이너 Terminal', x: 90, y: 140, type: 'origin' },
+          { id: 'IG-01', name: '인천신항 B구역 스마트 게이트', x: 220, y: 210, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_I1', name: '인천대교 남단 연결 인터체인지', x: 360, y: 330, type: 'waypoint' },
+          { id: 'WAY_I2', name: '수도권 제1순환 자율주행 차로 (남부)', x: 550, y: 390, type: 'waypoint' },
+          { id: 'IG-02', name: '부천 진입로 V2I 분기 게이트', x: 750, y: 280, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_I3', name: '부천 서부 물류 전용도로', x: 840, y: 200, type: 'waypoint' },
+          { id: 'INCHEON_DEST', name: '부천 스마트 물류 hub', x: 910, y: 120, type: 'destination' }
+        ],
+        routes: [
+          ['INCHEON_ORIGIN', 'IG-01', 'WAY_I1', 'WAY_I2', 'IG-02', 'WAY_I3', 'INCHEON_DEST']
+        ]
+      },
+      'pyeongtaek': {
+        name: '평택 권역',
+        title: '평택항 ➔ 오산 물류센터',
+        subtitle: '',
+        originName: '평택항 화물전용 부두',
+        destinationName: '오산 통합 물류센터',
+        nodes: [
+          { id: 'PT_ORIGIN', name: '평택항 Cargo Wharf Terminal', x: 80, y: 410, type: 'origin' },
+          { id: 'PG-01', name: '평택항 화물 전용 출구 게이트', x: 230, y: 380, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_P1', name: '평택 산단 자율 통로', x: 380, y: 230, type: 'waypoint' },
+          { id: 'PG-02', name: '평택-오산 경계 스마트 검수 게이트', x: 540, y: 160, type: 'gate', status: '정상 개방' },
+          { id: 'WAY_P2', name: '오산 고속화 도로 분기점', x: 700, y: 240, type: 'waypoint' },
+          { id: 'PG-03', name: '오산 센터 통합 통제 게이트', x: 820, y: 320, type: 'gate', status: '대기중' },
+          { id: 'PT_DEST', name: '오산 Center Logistics Hub', x: 930, y: 360, type: 'destination' }
+        ],
+        routes: [
+          ['PT_ORIGIN', 'PG-01', 'WAY_P1', 'PG-02', 'WAY_P2', 'PG-03', 'PT_DEST']
+        ]
+      }
+    };
+
+    const fleetDatabase = {
+      'FL-04': {
+        id: 'FL-04', type: 'porter', typeName: '현대 포터 II EV (1톤)', region: 'busan', status: '고속도로 자율운송', speedNum: 68, speed: '68 km/h', progress: 0.42,
+        battery: { soc: 88, soh: '98.5%', voltage: '710 V', health: '98 %', temp: '32.4 °C', cycles: 312, fastRate: '24.5%' },
+        wear: { brake: 15, tire: 12, motor: 10, suspension: 12 },
+        tires: {
+          fl: { press: '36.2 PSI', temp: '29°C', wear: 88 }, fr: { press: '36.5 PSI', temp: '30°C', wear: 87 },
+          rl: { press: '36.8 PSI', temp: '28°C', wear: 91 }, rr: { press: '36.4 PSI', temp: '29°C', wear: 90 }
+        },
+        cellTemps: ['31.2°C', '32.0°C', '32.8°C', '31.9°C'], coolant: 94, eps: 12, cargo: 'EV 배터리 셀 (1.2톤)', routeDesc: '부산항 ➔ 양산 허브'
+      },
+      'FL-09': {
+        id: 'FL-09', type: 'porter', typeName: '현대 포터 II EV (탑차)', region: 'busan', status: '항만 게이트 통과', speedNum: 45, speed: '45 km/h', progress: 0.22,
+        battery: { soc: 72, soh: '95.1%', voltage: '705 V', health: '95 %', temp: '34.8 °C', cycles: 480, fastRate: '38.2%' },
+        wear: { brake: 28, tire: 24, motor: 18, suspension: 22 },
+        tires: {
+          fl: { press: '35.8 PSI', temp: '33°C', wear: 76 }, fr: { press: '35.5 PSI', temp: '34°C', wear: 75 },
+          rl: { press: '36.0 PSI', temp: '32°C', wear: 80 }, rr: { press: '35.9 PSI', temp: '33°C', wear: 79 }
+        },
+        cellTemps: ['34.1°C', '34.9°C', '35.2°C', '34.5°C'], coolant: 88, eps: 18, cargo: '반도체 패키징 (0.8톤)', routeDesc: '부산항 ➔ 양산 허브'
+      },
+      'FL-15': {
+        id: 'FL-15', type: '5ton', typeName: '5톤 대형 e-트럭', region: 'busan', status: '양산 허브 진입', speedNum: 30, speed: '30 km/h', progress: 0.81,
+        battery: { soc: 64, soh: '96.8%', voltage: '720 V', health: '96 %', temp: '36.1 °C', cycles: 290, fastRate: '20.1%' },
+        wear: { brake: 20, tire: 18, motor: 15, suspension: 16 },
+        tires: {
+          fl: { press: '38.2 PSI', temp: '32°C', wear: 82 }, fr: { press: '38.0 PSI', temp: '32°C', wear: 81 },
+          rl: { press: '38.5 PSI', temp: '31°C', wear: 84 }, rr: { press: '38.4 PSI', temp: '31°C', wear: 83 }
+        },
+        cellTemps: ['35.5°C', '36.2°C', '36.8°C', '35.9°C'], coolant: 91, eps: 15, cargo: '수출용 정밀부품 (4.5톤)', routeDesc: '부산항 ➔ 양산 허브'
+      },
+      'IN-01': {
+        id: 'IN-01', type: 'porter', typeName: '현대 포터 II EV', region: 'incheon', status: '인천신항 출발', speedNum: 55, speed: '55 km/h', progress: 0.18,
+        battery: { soc: 91, soh: '99.0%', voltage: '715 V', health: '99 %', temp: '31.0 °C', cycles: 120, fastRate: '15.0%' },
+        wear: { brake: 10, tire: 8, motor: 8, suspension: 9 },
+        tires: {
+          fl: { press: '36.5 PSI', temp: '28°C', wear: 92 }, fr: { press: '36.5 PSI', temp: '28°C', wear: 92 },
+          rl: { press: '36.8 PSI', temp: '27°C', wear: 94 }, rr: { press: '36.7 PSI', temp: '27°C', wear: 93 }
+        },
+        cellTemps: ['30.5°C', '31.0°C', '31.2°C', '30.8°C'], coolant: 96, eps: 10, cargo: '항공 정밀 기기 (0.9톤)', routeDesc: '인천신항 ➔ 부천 물류단지'
+      },
+      'IN-07': {
+        id: 'IN-07', type: '5ton', typeName: '5톤 e-카고 트럭', region: 'incheon', status: '외곽순환 자율주행', speedNum: 75, speed: '75 km/h', progress: 0.55,
+        battery: { soc: 52, soh: '92.4%', voltage: '698 V', health: '92 %', temp: '38.2 °C', cycles: 550, fastRate: '42.0%' },
+        wear: { brake: 32, tire: 29, motor: 24, suspension: 28 },
+        tires: {
+          fl: { press: '37.1 PSI', temp: '36°C', wear: 71 }, fr: { press: '37.0 PSI', temp: '36°C', wear: 70 },
+          rl: { press: '37.5 PSI', temp: '35°C', wear: 74 }, rr: { press: '37.3 PSI', temp: '35°C', wear: 73 }
+        },
+        cellTemps: ['37.5°C', '38.2°C', '38.8°C', '38.0°C'], coolant: 85, eps: 22, cargo: '의류 종합 자재 (3.8톤)', routeDesc: '인천신항 ➔ 부천 물류단지'
+      },
+      'PT-02': {
+        id: 'PT-02', type: 'porter', typeName: '현대 포터 II EV', region: 'pyeongtaek', status: '평택항 게이트 승인', speedNum: 40, speed: '40 km/h', progress: 0.25,
+        battery: { soc: 82, soh: '97.2%', voltage: '712 V', health: '97 %', temp: '33.1 °C', cycles: 210, fastRate: '19.8%' },
+        wear: { brake: 14, tire: 13, motor: 11, suspension: 12 },
+        tires: {
+          fl: { press: '36.3 PSI', temp: '30°C', wear: 87 }, fr: { press: '36.2 PSI', temp: '30°C', wear: 86 },
+          rl: { press: '36.6 PSI', temp: '29°C', wear: 89 }, rr: { press: '36.5 PSI', temp: '29°C', wear: 88 }
+        },
+        cellTemps: ['32.5°C', '33.1°C', '33.5°C', '33.0°C'], coolant: 93, eps: 11, cargo: '자동차 정밀 모듈 (1.1톤)', routeDesc: '평택항 ➔ 오산 센터'
+      },
+      'PT-11': {
+        id: 'PT-11', type: '5ton', typeName: '5톤 e-윙바디', region: 'pyeongtaek', status: '오산 센터 입고 대기', speedNum: 20, speed: '20 km/h', progress: 0.68,
+        battery: { soc: 48, soh: '94.0%', voltage: '702 V', health: '94 %', temp: '35.0 °C', cycles: 410, fastRate: '31.5%' },
+        wear: { brake: 25, tire: 22, motor: 19, suspension: 21 },
+        tires: {
+          fl: { press: '37.8 PSI', temp: '33°C', wear: 78 }, fr: { press: '37.6 PSI', temp: '33°C', wear: 77 },
+          rl: { press: '38.0 PSI', temp: '32°C', wear: 81 }, rr: { press: '37.9 PSI', temp: '32°C', wear: 80 }
+        },
+        cellTemps: ['34.2°C', '35.0°C', '35.4°C', '34.8°C'], coolant: 89, eps: 17, cargo: '가전제품 완성품 (4.2톤)', routeDesc: '평택항 ➔ 오산 센터'
+      }
+    };
+
+    const tosDispatchQueue = {
+      'busan': [
+        { id: 'TOS-8821', route: '부산항 3부두 ➔ 양산 허브', cargo: 'EV 배터리 셀 (1.2톤)', type: '1톤 포터 EV', assigned: 'FL-04', status: '운송 중' },
+        { id: 'TOS-8824', route: '부산항 컨테이너 ➔ 양산 허브', cargo: '반도체 웨이퍼 (0.8톤)', type: '1톤 포터 EV', assigned: 'FL-09', status: '게이트 통과' },
+        { id: 'TOS-8829', route: '부산신항 ➔ 양산 물류센터', cargo: '중공업 부품 (4.5톤)', type: '5톤 e-트럭', assigned: 'FL-15', status: '배차 완료' }
+      ],
+      'incheon': [
+        { id: 'TOS-9102', route: '인천신항 A구역 ➔ 부천 단지', cargo: '항공 기기 (0.9톤)', type: '1톤 포터 EV', assigned: 'IN-01', status: '운송 중' },
+        { id: 'TOS-9108', route: '인천항 B부두 ➔ 부천 물류센터', cargo: '의류 원자재 (3.8톤)', type: '5톤 e-트럭', assigned: 'IN-07', status: '운송 중' }
+      ],
+      'pyeongtaek': [
+        { id: 'TOS-7031', route: '평택항 1부두 ➔ 오산 물류센터', cargo: '차량 모듈 (1.1톤)', type: '1톤 포터 EV', assigned: 'PT-02', status: '게이트 검수' },
+        { id: 'TOS-7035', route: '평택항 컨테이너 ➔ 오산 센터', cargo: '전자 가전 (4.2톤)', type: '5톤 e-트럭', assigned: 'PT-11', status: '도착 대기' }
+      ]
+    };
+
+    window.onload = function () {
+      renderPageData();
+      initVirtualMap();
+      populateDiagDropdown();
+      selectDiagnosticVehicle('FL-04', false);
+      startVirtualMapAnimation();
+      init3DParts();
+    };
+
+    function switchPage(pageIndex) {
+      document.querySelectorAll('.page-view').forEach((el, idx) => {
+        if (idx === pageIndex - 1) {
+          el.classList.remove('hidden');
+          el.classList.add('flex');
+        } else {
+          el.classList.add('hidden');
+          el.classList.remove('flex');
+        }
+      });
+
+      const navBtns = document.querySelectorAll('nav .nav-item');
+      navBtns.forEach((btn, idx) => {
+        if (idx === pageIndex - 1) {
+          btn.classList.add('text-primary-container', 'font-bold');
+          btn.classList.remove('text-on-surface-variant');
+        } else {
+          btn.classList.remove('text-primary-container', 'font-bold');
+          btn.classList.add('text-on-surface-variant');
+        }
+      });
+
+      if (pageIndex === 1) {
+        renderVirtualMap();
+      } else if (pageIndex === 4) {
+        setTimeout(() => resize3DCanvases(), 100);
+      }
+    }
+
+    function changeRegion(regionKey) {
+      currentRegion = regionKey;
+      
+      document.querySelectorAll('.hdr-region-btn').forEach(btn => {
+        btn.classList.remove('bg-primary-container', 'text-black', 'font-bold');
+        btn.classList.add('text-outline');
+      });
+      document.getElementById(`hdr-btn-${regionKey}`).classList.add('bg-primary-container', 'text-black', 'font-bold');
+      document.getElementById(`hdr-btn-${regionKey}`).classList.remove('text-outline');
+
+      closeMapHud();
+      renderPageData();
+      renderVirtualMap();
+      populateDiagDropdown();
+      
+      showTacticalToast(`권역 전환: ${virtualRegionsData[regionKey].name} 가상지도 적용`, 'map');
+    }
+
+    function renderPageData() {
+      const regionInfo = virtualRegionsData[currentRegion];
+      const regionalFleet = Object.values(fleetDatabase).filter(v => v.region === currentRegion);
+      const gates = regionInfo.nodes.filter(n => n.type === 'gate');
+
+      document.getElementById('stat-veh-count').innerText = `${regionalFleet.length} 대`;
+      document.getElementById('stat-veh-desc').innerText = `${regionInfo.name} 실시간 관제 중`;
+      document.getElementById('stat-gate-count').innerText = `${gates.length} 개소`;
+
+      document.getElementById('map-region-title').innerText = `${regionInfo.name} ${regionInfo.title}`;
+      document.getElementById('map-region-subtitle').innerText = regionInfo.subtitle;
+      document.getElementById('gate-region-badge').innerText = `${regionInfo.name} 게이트`;
+
+      const page1GateContainer = document.getElementById('page1-gate-summary-list');
+      page1GateContainer.innerHTML = gates.map(g => `
+        <div onclick="selectVirtualMapNode('${g.id}')" class="p-2.5 rounded-xl bg-surface-container-high hover:bg-surface-variant/80 border border-surface-variant/60 flex items-center justify-between cursor-pointer transition-all active:scale-95">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-success border border-white shadow-[0_0_8px_#26e07f]"></span>
+            <div>
+              <span class="font-headline-sm text-[12px] font-bold text-on-surface block">${g.name}</span>
+              <span class="font-label-tactical text-[9px] text-outline block">ID: ${g.id} • V2I Active</span>
+            </div>
+          </div>
+          <span class="text-[10px] font-label-tactical font-bold px-2 py-0.5 rounded bg-success/15 text-success border border-success/30">${g.status}</span>
+        </div>
+      `).join('');
+
+      const quickGateContainer = document.getElementById('map-gate-quick-btns');
+      quickGateContainer.innerHTML = gates.map(g => `
+        <button onclick="selectVirtualMapNode('${g.id}')" class="px-2 py-1 rounded-lg bg-surface-container-high hover:bg-primary-container hover:text-black border border-surface-variant text-[9px] font-label-tactical font-bold text-primary-container transition-all">
+          ${g.id}
+        </button>
+      `).join('');
+
+      const gateContainer = document.getElementById('gate-list-container');
+      gateContainer.innerHTML = gates.map(g => `
+        <div class="bg-surface-container rounded-2xl p-4 border border-surface-variant/60 flex flex-col justify-between shadow-lg">
+          <div class="flex justify-between items-start border-b border-surface-variant/40 pb-2">
+            <div>
+              <span class="font-label-tactical text-[10px] text-primary-container font-bold">${g.id}</span>
+              <h3 class="font-headline-sm text-sm font-bold text-on-surface">${g.name}</h3>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[9px] font-label-tactical font-bold bg-success/20 text-success border border-success/40">${g.status}</span>
+          </div>
+          <div class="my-3 space-y-1.5 text-[11px] font-label-tactical">
+            <div class="flex justify-between"><span class="text-outline">RFID/V2I 신호:</span><span class="text-primary-container font-bold">-41 dBm (정상)</span></div>
+            <div class="flex justify-between"><span class="text-outline">차단기 자동 제어:</span><span class="text-success font-bold">Auto Open</span></div>
+            <div class="flex justify-between"><span class="text-outline">평균 통과 시간:</span><span class="text-on-surface">1.8초</span></div>
+          </div>
+          <div class="flex gap-2 pt-2 border-t border-surface-variant/40">
+            <button onclick="openGateInfoModal('${g.id}', '${g.name}')" class="flex-1 py-1.5 bg-primary-container/20 hover:bg-primary-container/30 text-primary-container font-label-tactical text-[10px] rounded-xl font-bold border border-primary-container/40">상세 정보</button>
+            <button onclick="triggerGateMapHighlight('${g.id}')" class="px-3 py-1.5 bg-surface-container-high hover:bg-surface-variant text-on-surface font-label-tactical text-[10px] rounded-xl border border-surface-variant/60">가상지도 위치</button>
+          </div>
+        </div>
+      `).join('');
+
+      document.getElementById('gate-fleet-grid').innerHTML = regionalFleet.map(v => createFleetCardHTML(v)).join('');
+
+      const tosList = tosDispatchQueue[currentRegion] || [];
+      const tbody = document.getElementById('dispatch-table-body');
+      tbody.innerHTML = tosList.map(o => `
+        <tr class="hover:bg-surface-container-high/50 transition-colors">
+          <td class="p-3 text-primary-container font-bold">${o.id}</td>
+          <td class="p-3 text-on-surface font-semibold">${o.route}</td>
+          <td class="p-3 text-secondary">${o.cargo}</td>
+          <td class="p-3 text-outline">${o.type}</td>
+          <td class="p-3 text-success font-bold">${o.assigned}</td>
+          <td class="p-3"><span class="px-2 py-0.5 text-[9px] rounded font-bold bg-primary-container/15 text-primary-container border border-primary-container/30">${o.status}</span></td>
+        </tr>
+      `).join('');
+
+      document.getElementById('dispatch-fleet-grid').innerHTML = regionalFleet.map(v => createFleetCardHTML(v)).join('');
+    }
+
+    function triggerGateMapHighlight(gateId) {
+      switchPage(1);
+      setTimeout(() => {
+        selectVirtualMapNode(gateId);
+      }, 50);
+    }
+
+    function createFleetCardHTML(v) {
+      return `
+        <div onclick="selectDiagnosticVehicle('${v.id}', true)" class="bg-surface-container rounded-2xl p-3.5 border border-surface-variant/60 hover:border-primary-container/50 flex flex-col justify-between shadow-md transition-all cursor-pointer group">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="font-label-tactical text-[11px] font-bold text-primary-container group-hover:underline">${v.id}</span>
+                <span class="text-[9px] font-label-tactical px-1.5 py-0.2 rounded bg-surface-variant text-outline">${v.speed}</span>
+              </div>
+              <h4 class="font-headline-sm text-[13px] font-bold text-on-surface mt-0.5">${v.typeName}</h4>
+            </div>
+            <span class="w-2.5 h-2.5 rounded-full bg-success border border-white shadow-[0_0_8px_#26e07f]"></span>
+          </div>
+
+          <div class="space-y-1 my-2 text-[10px] font-label-tactical bg-surface-container-lowest/60 p-2 rounded-xl">
+            <div class="flex justify-between"><span class="text-outline">현재 위치/상태:</span><span class="text-primary-container font-semibold">${v.status}</span></div>
+            <div class="flex justify-between"><span class="text-outline">적재 화물:</span><span class="text-secondary font-semibold">${v.cargo}</span></div>
+            <div class="flex justify-between"><span class="text-outline">배터리 SOC:</span><span class="text-success font-bold">${v.battery.soc}% (${v.battery.voltage})</span></div>
+          </div>
+
+          <div class="flex items-center justify-between pt-1 border-t border-surface-variant/40 text-[10px] font-label-tactical">
+            <span class="text-outline">${v.routeDesc}</span>
+            <span class="text-primary-container group-hover:translate-x-1 transition-transform flex items-center">진단보기 ➔</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function initVirtualMap() {
+      const container = document.getElementById('virtual-map-container');
+      if (!container) return;
+
+      container.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+        mapZoomScale = Math.min(Math.max(0.8, mapZoomScale * zoomFactor), 4.0);
+        applyMapTransform();
+      }, { passive: false });
+
+      container.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isMapPanning = true;
+        mapPanStartX = e.clientX - mapPanX;
+        mapPanStartY = e.clientY - mapPanY;
+        container.style.cursor = 'grabbing';
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isMapPanning) return;
+        mapPanX = e.clientX - mapPanStartX;
+        mapPanY = e.clientY - mapPanStartY;
+        applyMapTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isMapPanning) {
+          isMapPanning = false;
+          container.style.cursor = 'crosshair';
+        }
+      });
+
+      let touchStartDist = 0;
+      container.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          isMapPanning = true;
+          mapPanStartX = e.touches[0].clientX - mapPanX;
+          mapPanStartY = e.touches[0].clientY - mapPanY;
+        } else if (e.touches.length === 2) {
+          touchStartDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+        }
+      }, { passive: false });
+
+      container.addEventListener('touchmove', (e) => {
+        if (e.cancelable) e.preventDefault();
+        if (e.touches.length === 1 && isMapPanning) {
+          mapPanX = e.touches[0].clientX - mapPanStartX;
+          mapPanY = e.touches[0].clientY - mapPanStartY;
+          applyMapTransform();
+        } else if (e.touches.length === 2 && touchStartDist > 0) {
+          const currentDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          const factor = currentDist / touchStartDist;
+          mapZoomScale = Math.min(Math.max(0.8, mapZoomScale * factor), 4.0);
+          touchStartDist = currentDist;
+          applyMapTransform();
+        }
+      }, { passive: false });
+
+      container.addEventListener('touchend', () => {
+        isMapPanning = false;
+        touchStartDist = 0;
+      });
+
+      renderVirtualMap();
+    }
+
+    function applyMapTransform() {
+      const zoomContent = document.getElementById('svg-zoom-content');
+      if (zoomContent) {
+        zoomContent.style.transform = `translate(${mapPanX}px, ${mapPanY}px) scale(${mapZoomScale})`;
+      }
+    }
+
+    function resetVirtualMapZoom() {
+      mapZoomScale = 1;
+      mapPanX = 0;
+      mapPanY = 0;
+      applyMapTransform();
+      renderVirtualMap();
+      closeMapHud();
+      showTacticalToast('가상지도 시점 초기화 완료', 'center_focus_strong');
+    }
+
+    function renderVirtualMap() {
+      const gridGroup = document.getElementById('svg-grid-group');
+      const routesGroup = document.getElementById('svg-routes-group');
+      const gatesGroup = document.getElementById('svg-gates-group');
+      const vehiclesGroup = document.getElementById('svg-vehicles-group');
+
+      if (!gridGroup || !routesGroup || !gatesGroup || !vehiclesGroup) return;
+
+      gridGroup.innerHTML = '';
+      routesGroup.innerHTML = '';
+      gatesGroup.innerHTML = '';
+      vehiclesGroup.innerHTML = '';
+
+      const region = virtualRegionsData[currentRegion];
+      if (!region) return;
+
+      for (let x = 50; x < 1000; x += 100) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", x); line.setAttribute("y1", "0");
+        line.setAttribute("x2", x); line.setAttribute("y2", "500");
+        line.setAttribute("stroke", "rgba(120, 135, 150, 0.08)");
+        line.setAttribute("stroke-width", "1");
+        gridGroup.appendChild(line);
+      }
+      for (let y = 50; y < 500; y += 80) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", "0"); line.setAttribute("y1", y);
+        line.setAttribute("x2", "1000"); line.setAttribute("y2", y);
+        line.setAttribute("stroke", "rgba(120, 135, 150, 0.08)");
+        line.setAttribute("stroke-width", "1");
+        gridGroup.appendChild(line);
+      }
+
+      region.routes.forEach(routeNodeIds => {
+        const pointsStr = routeNodeIds.map(nid => {
+          const node = region.nodes.find(n => n.id === nid);
+          return node ? `${node.x},${node.y}` : '';
+        }).join(' ');
+
+        const glowPath = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        glowPath.setAttribute("points", pointsStr);
+        glowPath.setAttribute("fill", "none");
+        glowPath.setAttribute("stroke", "#00f0ff");
+        glowPath.setAttribute("stroke-width", "8");
+        glowPath.setAttribute("stroke-opacity", "0.25");
+        glowPath.setAttribute("filter", "url(#neonGlow)");
+        routesGroup.appendChild(glowPath);
+
+        const mainPath = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        mainPath.setAttribute("points", pointsStr);
+        mainPath.setAttribute("fill", "none");
+        mainPath.setAttribute("stroke", "url(#routeGradient)");
+        mainPath.setAttribute("stroke-width", "4");
+        mainPath.setAttribute("stroke-linecap", "round");
+        mainPath.setAttribute("stroke-linejoin", "round");
+        routesGroup.appendChild(mainPath);
+      });
+
+      region.nodes.forEach(node => {
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("id", `map-node-${node.id}`);
+        g.setAttribute("class", "cursor-pointer group pointer-events-auto");
+        
+        const handleNodeClick = (e) => {
+          if (e) {
+            e.stopPropagation();
+            if (e.cancelable) e.preventDefault();
+          }
+          selectVirtualMapNode(node.id);
+        };
+
+        g.addEventListener('click', handleNodeClick);
+
+        if (node.type === 'origin' || node.type === 'destination') {
+          const circleOuter = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circleOuter.setAttribute("cx", node.x); circleOuter.setAttribute("cy", node.y);
+          circleOuter.setAttribute("r", "16"); circleOuter.setAttribute("fill", "#ffb868");
+          circleOuter.setAttribute("fill-opacity", "0.2");
+          circleOuter.setAttribute("stroke", "#ffb868"); circleOuter.setAttribute("stroke-width", "2");
+
+          const circleInner = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circleInner.setAttribute("cx", node.x); circleInner.setAttribute("cy", node.y);
+          circleInner.setAttribute("r", "7"); circleInner.setAttribute("fill", "#ffb868");
+
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", node.x); text.setAttribute("y", node.y + 32);
+          text.setAttribute("text-anchor", "middle"); text.setAttribute("fill", "#dfe2f1");
+          text.setAttribute("font-size", "11"); text.setAttribute("font-weight", "bold");
+          text.setAttribute("font-family", "JetBrains Mono, monospace");
+          text.textContent = node.name;
+
+          g.appendChild(circleOuter); g.appendChild(circleInner); g.appendChild(text);
+        } else if (node.type === 'gate') {
+          const pulseRing = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          pulseRing.setAttribute("cx", node.x); pulseRing.setAttribute("cy", node.y);
+          pulseRing.setAttribute("r", "18"); pulseRing.setAttribute("fill", "#26e07f");
+          pulseRing.setAttribute("fill-opacity", "0.15");
+          pulseRing.setAttribute("stroke", "#26e07f"); pulseRing.setAttribute("stroke-width", "1.5");
+          pulseRing.setAttribute("stroke-dasharray", "3,3");
+
+          const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          rect.setAttribute("x", node.x - 10); rect.setAttribute("y", node.y - 10);
+          rect.setAttribute("width", "20"); rect.setAttribute("height", "20");
+          rect.setAttribute("rx", "5"); rect.setAttribute("fill", "#05070c");
+          rect.setAttribute("stroke", "#26e07f"); rect.setAttribute("stroke-width", "2");
+
+          const textID = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          textID.setAttribute("x", node.x); textID.setAttribute("y", node.y - 20);
+          textID.setAttribute("text-anchor", "middle"); textID.setAttribute("fill", "#26e07f");
+          textID.setAttribute("font-size", "10"); textID.setAttribute("font-weight", "bold");
+          textID.setAttribute("font-family", "JetBrains Mono, monospace");
+          textID.textContent = `[GATE] ${node.id}`;
+
+          const textName = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          textName.setAttribute("x", node.x); textName.setAttribute("y", node.y + 26);
+          textName.setAttribute("text-anchor", "middle"); textName.setAttribute("fill", "#a2b4c7");
+          textName.setAttribute("font-size", "10"); textName.setAttribute("font-family", "Noto Sans KR, sans-serif");
+          textName.textContent = node.name;
+
+          g.appendChild(pulseRing); g.appendChild(rect); g.appendChild(textID); g.appendChild(textName);
+        } else {
+          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circle.setAttribute("cx", node.x); circle.setAttribute("cy", node.y);
+          circle.setAttribute("r", "4"); circle.setAttribute("fill", "#00f0ff");
+
+          g.appendChild(circle);
+        }
+
+        gatesGroup.appendChild(g);
+      });
+
+      const regionalFleet = Object.values(fleetDatabase).filter(v => v.region === currentRegion);
+      regionalFleet.forEach(veh => {
+        const coords = calculateVehicleSyntheticPos(veh.progress, region.nodes);
+        
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("id", `veh-marker-${veh.id}`);
+        g.setAttribute("class", "cursor-pointer pointer-events-auto");
+
+        const handleVehClick = (e) => {
+          if (e) {
+            e.stopPropagation();
+            if (e.cancelable) e.preventDefault();
+          }
+          selectVehicleOnMap(veh.id);
+        };
+
+        g.addEventListener('click', handleVehClick);
+
+        const halo = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        halo.setAttribute("cx", coords.x); halo.setAttribute("cy", coords.y);
+        halo.setAttribute("r", "14"); halo.setAttribute("fill", "#00f0ff");
+        halo.setAttribute("fill-opacity", "0.3");
+
+        const body = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        body.setAttribute("cx", coords.x); body.setAttribute("cy", coords.y);
+        body.setAttribute("r", "8"); body.setAttribute("fill", "#00f0ff");
+        body.setAttribute("stroke", "#ffffff"); body.setAttribute("stroke-width", "1.5");
+
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", coords.x); label.setAttribute("y", coords.y - 18);
+        label.setAttribute("text-anchor", "middle"); label.setAttribute("fill", "#00f0ff");
+        label.setAttribute("font-size", "10"); label.setAttribute("font-weight", "bold");
+        label.setAttribute("font-family", "JetBrains Mono, monospace");
+        label.textContent = `${veh.id} (${veh.speed})`;
+
+        g.appendChild(halo); g.appendChild(body); g.appendChild(label);
+        vehiclesGroup.appendChild(g);
+      });
+    }
+
+    function selectVehicleOnMap(vehId) {
+      const v = fleetDatabase[vehId];
+      if (!v) return;
+
+      const hud = document.getElementById('map-telemetry-hud');
+      const hudTitle = document.getElementById('hud-type-title');
+      const hudBody = document.getElementById('hud-content-body');
+
+      hud.classList.remove('hidden');
+
+      hudTitle.innerHTML = `<span class="material-symbols-outlined text-[16px] text-primary-container">local_shipping</span> 운행 차량 실시간 텔레메트리`;
+      hudBody.innerHTML = `
+        <div class="bg-primary-container/10 p-2 rounded-lg border border-primary-container/30 mb-1">
+          <span class="text-outline text-[9px] block">차량 식별 ID: ${v.id}</span>
+          <span class="font-bold text-primary-container text-[13px] block">${v.typeName}</span>
+        </div>
+        <div class="space-y-1 text-[10px]">
+          <div class="flex justify-between"><span class="text-outline">현재 관제 속도:</span><span class="text-success font-bold">${v.speed}</span></div>
+          <div class="flex justify-between"><span class="text-outline">운행 상태:</span><span class="text-on-surface font-bold">${v.status}</span></div>
+          <div class="flex justify-between"><span class="text-outline">배터리 SOC (잔여):</span><span class="text-primary-container font-bold">${v.battery.soc}% (${v.battery.voltage})</span></div>
+          <div class="flex justify-between"><span class="text-outline">적재 화물:</span><span class="text-secondary font-semibold">${v.cargo}</span></div>
+        </div>
+        <button onclick="selectDiagnosticVehicle('${v.id}', true)" class="w-full mt-2 py-1.5 bg-primary-container hover:bg-surface-tint text-black font-bold rounded-lg text-[10px] shadow-md transition-all active:scale-95">차량 부품 정밀 진단 ➔</button>
+      `;
+
+      showTacticalToast(`선택 차량: [${v.id}] ${v.typeName} (${v.speed})`, 'local_shipping');
+    }
+
+    function selectVirtualMapNode(nodeId) {
+      const region = virtualRegionsData[currentRegion];
+      const node = region.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+
+      selectedMapNode = node;
+      const hud = document.getElementById('map-telemetry-hud');
+      const hudTitle = document.getElementById('hud-type-title');
+      const hudBody = document.getElementById('hud-content-body');
+
+      hud.classList.remove('hidden');
+
+      if (node.type === 'gate') {
+        hudTitle.innerHTML = `<span class="material-symbols-outlined text-[16px] text-success">sensor_door</span> V2I 스마트 게이트 감지`;
+        hudBody.innerHTML = `
+          <div class="bg-primary-container/10 p-2 rounded-lg border border-primary-container/30 mb-1">
+            <span class="text-outline text-[9px] block">게이트 식별 ID: ${node.id}</span>
+            <span class="font-bold text-primary-container text-[13px] block">${node.name}</span>
+          </div>
+          <div class="space-y-1 text-[10px]">
+            <div class="flex justify-between"><span class="text-outline">소속 관제 권역:</span><span class="text-on-surface font-bold">${region.name}</span></div>
+            <div class="flex justify-between"><span class="text-outline">V2I 연동 상태:</span><span class="text-success font-bold">${node.status}</span></div>
+            <div class="flex justify-between"><span class="text-outline">V2X 통신 채널:</span><span class="text-on-surface">5.9GHz WAVE (Ch.172)</span></div>
+            <div class="flex justify-between"><span class="text-outline">신호 수신 감도:</span><span class="text-primary-container font-bold">-41 dBm (우수)</span></div>
+          </div>
+          <button onclick="openGateInfoModal('${node.id}', '${node.name}')" class="w-full mt-2 py-1.5 bg-primary-container hover:bg-surface-tint text-black font-bold rounded-lg text-[10px] shadow-md transition-all active:scale-95">게이트 상세 원격 통제 ➔</button>
+        `;
+      } else {
+        hudTitle.innerHTML = `<span class="material-symbols-outlined text-[16px] text-secondary">domain</span> 거점 터미널/허브 노드`;
+        hudBody.innerHTML = `
+          <div class="bg-secondary/10 p-2 rounded-lg border border-secondary/30 mb-1">
+            <span class="text-outline text-[9px] block">노드 ID: ${node.id}</span>
+            <span class="font-bold text-secondary text-[13px] block">${node.name}</span>
+          </div>
+          <div class="space-y-1 text-[10px]">
+            <div class="flex justify-between"><span class="text-outline">소속 관제 권역:</span><span class="text-on-surface font-bold">${region.name}</span></div>
+            <div class="flex justify-between"><span class="text-outline">터미널 구분:</span><span class="text-primary-container font-bold">${node.type === 'origin' ? '출발 터미널' : '도착 허브'}</span></div>
+            <div class="flex justify-between"><span class="text-outline">V2X 통신:</span><span class="text-success font-bold">5G V2I Active</span></div>
+          </div>
+        `;
+      }
+
+      showTacticalToast(`선택 게이트/노드: [${node.id}] ${node.name}`, 'sensors');
+
+      document.querySelectorAll('[id^="map-node-"]').forEach(el => el.classList.remove('gate-blink-anim'));
+      const targetNodeEl = document.getElementById(`map-node-${nodeId}`);
+      if (targetNodeEl) {
+        void targetNodeEl.offsetWidth;
+        targetNodeEl.classList.add('gate-blink-anim');
+        setTimeout(() => {
+          targetNodeEl.classList.remove('gate-blink-anim');
+        }, 1800);
+      }
+    }
+
+    function zoomVirtualMap(factor) {
+      const newScale = Math.min(Math.max(0.8, mapZoomScale * factor), 4);
+      mapZoomScale = newScale;
+      applyMapTransform();
+    }
+
+    function startVirtualMapAnimation() {
+      function animate() {
+        Object.values(fleetDatabase).forEach(v => {
+          v.progress += 0.00008;
+          if (v.progress > 0.95) v.progress = 0.05;
+        });
+
+        const page1 = document.getElementById('page-1');
+        if (page1 && !page1.classList.contains('hidden')) {
+          renderVirtualMap();
+        }
+
+        animFrameReq = requestAnimationFrame(animate);
+      }
+      animate();
+    }
+
+    // --- Three.js 3D Interactive Parts Module with Drag Controls ---
+    function init3DParts() {
+      create3DPartView('3d-tire-canvas', 'tire');
+      create3DPartView('3d-battery-canvas', 'battery');
+      create3DPartView('3d-aux-canvas', 'aux');
+
+      window.addEventListener('resize', () => resize3DCanvases());
+    }
+
+    function create3DPartView(containerId, partType) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      const width = container.clientWidth || 280;
+      const height = container.clientHeight || 160;
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+      camera.position.set(0, 0, 4);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      container.innerHTML = '';
+      container.appendChild(renderer.domElement);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0x00f0ff, 1.2);
+      dirLight.position.set(5, 5, 5);
+      scene.add(dirLight);
+
+      const pointLight = new THREE.PointLight(0xffb868, 0.8);
+      pointLight.position.set(-5, -5, 2);
+      scene.add(pointLight);
+
+      let meshGroup = new THREE.Group();
+
+      if (partType === 'tire') {
+        const tireGeo = new THREE.TorusGeometry(1.0, 0.38, 20, 40);
+        const tireMat = new THREE.MeshStandardMaterial({ color: 0x1f2430, roughness: 0.7, metalness: 0.2 });
+        const tireMesh = new THREE.Mesh(tireGeo, tireMat);
+
+        const rimGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.3, 24);
+        const rimMat = new THREE.MeshStandardMaterial({ color: 0x00f0ff, metalness: 0.9, roughness: 0.1, wireframe: true });
+        const rimMesh = new THREE.Mesh(rimGeo, rimMat);
+        rimMesh.rotation.x = Math.PI / 2;
+
+        meshGroup.add(tireMesh);
+        meshGroup.add(rimMesh);
+      } else if (partType === 'battery') {
+        const packGeo = new THREE.BoxGeometry(2.2, 0.4, 1.4);
+        const packMat = new THREE.MeshStandardMaterial({ color: 0x10131d, metalness: 0.8, roughness: 0.2 });
+        const packMesh = new THREE.Mesh(packGeo, packMat);
+
+        for (let x = -0.8; x <= 0.8; x += 0.4) {
+          for (let z = -0.4; z <= 0.4; z += 0.4) {
+            const cellGeo = new THREE.BoxGeometry(0.3, 0.45, 0.3);
+            const cellMat = new THREE.MeshStandardMaterial({ color: 0x00f0ff, wireframe: true });
+            const cellMesh = new THREE.Mesh(cellGeo, cellMat);
+            cellMesh.position.set(x, 0.05, z);
+            meshGroup.add(cellMesh);
+          }
+        }
+        meshGroup.add(packMesh);
+        meshGroup.rotation.x = 0.4;
+      } else if (partType === 'aux') {
+        const motorGeo = new THREE.CylinderGeometry(0.8, 0.8, 1.6, 24);
+        const motorMat = new THREE.MeshStandardMaterial({ color: 0x282d3c, metalness: 0.8, roughness: 0.3 });
+        const motorMesh = new THREE.Mesh(motorGeo, motorMat);
+        motorMesh.rotation.z = Math.PI / 2;
+
+        const coilGeo = new THREE.TorusGeometry(0.82, 0.05, 12, 30);
+        const coilMat = new THREE.MeshStandardMaterial({ color: 0x26e07f, wireframe: true });
+        const coilMesh = new THREE.Mesh(coilGeo, coilMat);
+        coilMesh.rotation.y = Math.PI / 2;
+
+        meshGroup.add(motorMesh);
+        meshGroup.add(coilMesh);
+        meshGroup.rotation.y = 0.5;
+      }
+
+      scene.add(meshGroup);
+
+      let isDragging = false;
+      let previousMousePosition = { x: 0, y: 0 };
+      let autoRotate = true;
+
+      const domElement = renderer.domElement;
+
+      const onPointerDown = (x, y) => {
+        isDragging = true;
+        autoRotate = false;
+        previousMousePosition = { x, y };
+      };
+
+      const onPointerMove = (x, y) => {
+        if (!isDragging) return;
+        const deltaMove = {
+          x: x - previousMousePosition.x,
+          y: y - previousMousePosition.y
+        };
+
+        meshGroup.rotation.y += deltaMove.x * 0.01;
+        meshGroup.rotation.x += deltaMove.y * 0.01;
+
+        previousMousePosition = { x, y };
+      };
+
+      const onPointerUp = () => {
+        isDragging = false;
+      };
+
+      domElement.addEventListener('mousedown', (e) => onPointerDown(e.clientX, e.clientY));
+      window.addEventListener('mousemove', (e) => onPointerMove(e.clientX, e.clientY));
+      window.addEventListener('mouseup', onPointerUp);
+
+      domElement.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      window.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1) {
+          onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      window.addEventListener('touchend', onPointerUp);
+
+      threeScenes[containerId] = { scene, camera, renderer, meshGroup, container, resetRotation: () => {
+        meshGroup.rotation.set(0, 0, 0);
+        if (partType === 'battery') meshGroup.rotation.x = 0.4;
+        if (partType === 'aux') meshGroup.rotation.y = 0.5;
+        autoRotate = true;
+      }};
+
+      function animate() {
+        requestAnimationFrame(animate);
+        if (autoRotate && !isDragging) {
+          meshGroup.rotation.y += 0.008;
+        }
+        renderer.render(scene, camera);
+      }
+      animate();
+    }
+
+    function reset3DPartRotation(containerId) {
+      if (threeScenes[containerId] && threeScenes[containerId].resetRotation) {
+        threeScenes[containerId].resetRotation();
+        showTacticalToast('3D 모델 회전 각도가 초기화되었습니다.', 'restart_alt');
+      }
+    }
+
+    function resize3DCanvases() {
+      Object.keys(threeScenes).forEach(id => {
+        const item = threeScenes[id];
+        if (item && item.container) {
+          const w = item.container.clientWidth || 280;
+          const h = item.container.clientHeight || 160;
+          item.camera.aspect = w / h;
+          item.camera.updateProjectionMatrix();
+          item.renderer.setSize(w, h);
+        }
+      });
+    }
+
+    function open3DPartDetailModal(partType) {
+      const modal = document.getElementById('part-3d-detail-modal');
+      const title = document.getElementById('modal-part-title');
+      const subtitle = document.getElementById('modal-part-subtitle');
+      const metrics = document.getElementById('modal-part-metrics');
+      const container = document.getElementById('3d-modal-canvas');
+
+      if (!modal || !container) return;
+
+      container.innerHTML = '';
+      modal.classList.remove('hidden');
+
+      const v = fleetDatabase[currentDiagVehicleId];
+
+      if (partType === 'tire') {
+        title.innerText = `[${currentDiagVehicleId}] 4륜 타이어 & TPMS 정밀 진단`;
+        subtitle.innerText = `센서 노드: 4륜 접지 / 공기압 / 트레드 마모 수명 모니터링`;
+        metrics.innerHTML = `
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">전륜 좌/우 (FL/FR) 공기압:</span><span class="text-success font-bold">${v.tires.fl.press} / ${v.tires.fr.press}</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">후륜 좌/우 (RL/RR) 공기압:</span><span class="text-success font-bold">${v.tires.rl.press} / ${v.tires.rr.press}</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">평균 트레드 잔여 수명:</span><span class="text-primary-container font-bold">89% (잔여 약 42,000 km)</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">TPMS 무선 센서 상태:</span><span class="text-success font-bold">정상 수신 (배터리 94%)</span></div>
+        `;
+      } else if (partType === 'battery') {
+        title.innerText = `[${currentDiagVehicleId}] 고전압 배터리 BMS 정밀 진단`;
+        subtitle.innerText = `셀 밸런싱 / Pack Voltage / 절연 저항 텔레메트리`;
+        metrics.innerHTML = `
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">팩 전압 / 잔존 수명(SoH):</span><span class="text-primary-container font-bold">${v.battery.voltage} / ${v.battery.soh}</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">모듈 셀 최고/최저 온도:</span><span class="text-success font-bold">32.8°C / 31.2°C (편차 1.6°C)</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">고전압 절연 저항 값:</span><span class="text-success font-bold">500 MΩ (안전 기준 충족)</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">급속 충전 이력 / 사이클:</span><span class="text-secondary font-bold">${v.battery.fastRate} / ${v.battery.cycles}회</span></div>
+        `;
+      } else {
+        title.innerText = `[${currentDiagVehicleId}] 구동 모터 & 브레이크/냉각계통 진단`;
+        subtitle.innerText = `인버터 토크 변환 / 회생제동 패드 / EPS 부하 모니터링`;
+        metrics.innerHTML = `
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">구동 모터 / 인버터 온도:</span><span class="text-primary-container font-bold">48.2°C (정상 작동 범위)</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">회생제동 브레이크 패드 잔여:</span><span class="text-success font-bold">85% (양호)</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">절연 냉각수 잔여 유량:</span><span class="text-primary-container font-bold">${v.coolant}%</span></div>
+          <div class="bg-surface-container p-2.5 rounded-lg flex justify-between"><span class="text-outline">EPS 전동 조향 모터 부하:</span><span class="text-on-surface font-bold">${v.eps}% (안정)</span></div>
+        `;
+      }
+
+      setTimeout(() => {
+        create3DPartView('3d-modal-canvas', partType);
+      }, 50);
+    }
+
+    function close3DPartDetailModal() {
+      const modal = document.getElementById('part-3d-detail-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    function populateDiagDropdown() {
+      const select = document.getElementById('diag-vehicle-select');
+      const regionalFleet = Object.values(fleetDatabase).filter(v => v.region === currentRegion);
+      
+      select.innerHTML = regionalFleet.map(v => `
+        <option value="${v.id}" ${v.id === currentDiagVehicleId ? 'selected' : ''}>[${v.id}] ${v.typeName}</option>
+      `).join('');
+
+      if (regionalFleet.length > 0 && !regionalFleet.some(v => v.id === currentDiagVehicleId)) {
+        selectDiagnosticVehicle(regionalFleet[0].id, false);
+      }
+    }
+
+    function selectDiagnosticVehicle(vehId, shouldSwitchPage = false) {
+      currentDiagVehicleId = vehId;
+      const v = fleetDatabase[vehId];
+      if (!v) return;
+
+      document.getElementById('diag-region-desc').innerText = `${v.typeName} (${v.id}) CAN-BUS 텔레메트리 live`;
+
+      document.getElementById('diag-card-soh').innerText = v.battery.soh;
+      document.getElementById('diag-card-btemp').innerText = v.battery.temp;
+      document.getElementById('diag-card-tpms').innerText = v.tires.fl.press;
+      
+      document.getElementById('tire-fl-press').innerText = v.tires.fl.press;
+      document.getElementById('tire-fl-temp').innerText = v.tires.fl.temp;
+      document.getElementById('tire-fl-wear').innerText = `${v.tires.fl.wear}%`;
+      document.getElementById('tire-fl-bar').style.width = `${v.tires.fl.wear}%`;
+
+      document.getElementById('tire-fr-press').innerText = v.tires.fr.press;
+      document.getElementById('tire-fr-temp').innerText = v.tires.fr.temp;
+      document.getElementById('tire-fr-wear').innerText = `${v.tires.fr.wear}%`;
+      document.getElementById('tire-fr-bar').style.width = `${v.tires.fr.wear}%`;
+
+      document.getElementById('tire-rl-press').innerText = v.tires.rl.press;
+      document.getElementById('tire-rl-temp').innerText = v.tires.rl.temp;
+      document.getElementById('tire-rl-wear').innerText = `${v.tires.rl.wear}%`;
+      document.getElementById('tire-rl-bar').style.width = `${v.tires.rl.wear}%`;
+
+      document.getElementById('tire-rr-press').innerText = v.tires.rr.press;
+      document.getElementById('tire-rr-temp').innerText = v.tires.rr.temp;
+      document.getElementById('tire-rr-wear').innerText = `${v.tires.rr.wear}%`;
+      document.getElementById('tire-rr-bar').style.width = `${v.tires.rr.wear}%`;
+
+      document.getElementById('bms-pack-voltage').innerText = `${v.battery.voltage} High-Volt`;
+      document.getElementById('bms-cycles').innerText = `${v.battery.cycles} 회`;
+      document.getElementById('bms-fast-charge').innerText = v.battery.fastRate;
+
+      if (v.cellTemps && v.cellTemps.length >= 4) {
+        document.getElementById('cell-m1').innerText = v.cellTemps[0];
+        document.getElementById('cell-m2').innerText = v.cellTemps[1];
+        document.getElementById('cell-m3').innerText = v.cellTemps[2];
+        document.getElementById('cell-m4').innerText = v.cellTemps[3];
+      }
+
+      document.getElementById('acc-coolant').innerText = `${v.coolant}% (정상)`;
+      document.getElementById('acc-coolant-bar').style.width = `${v.coolant}%`;
+
+      document.getElementById('acc-eps').innerText = `${v.eps}% (안정)`;
+      document.getElementById('acc-eps-bar').style.width = `${v.eps}%`;
+
+      const select = document.getElementById('diag-vehicle-select');
+      if (select) select.value = vehId;
+
+      if (shouldSwitchPage) {
+        switchPage(4);
+      }
+    }
+
+    function runComponentSelfTest() {
+      showTacticalToast(`[${currentDiagVehicleId}] CAN-BUS 부품 자가진단 수행 중...`, 'flaky');
+      setTimeout(() => {
+        showTacticalToast(`[${currentDiagVehicleId}] 모든 부속품 시스템 진단 완료 (정상)`, 'check_circle');
+      }, 1200);
+    }
+
+    function syncTosQueue() {
+      showTacticalToast('TOS 배차 서버 오더 데이터 동기화 완료', 'sync');
+    }
+
+    function openGateInfoModal(gateId, gateName) {
+      document.getElementById('modal-gate-title').innerText = gateId;
+      document.getElementById('modal-gate-location').innerText = gateName;
+      document.getElementById('gate-info-modal').classList.remove('hidden');
+    }
+
+    function closeGateInfoModal() {
+      document.getElementById('gate-info-modal').classList.add('hidden');
+    }
+
+    function handleGateAction(action) {
+      const statusEl = document.getElementById('modal-gate-status');
+      if (action === '차단') {
+        statusEl.innerText = '수동 차단됨 (Manual Closed)';
+        statusEl.className = 'text-error font-bold';
+        showTacticalToast('게이트가 차단되었습니다.', 'block');
+      } else {
+        statusEl.innerText = '자동 개방 (Auto Gate Pass)';
+        statusEl.className = 'text-success font-bold';
+        showTacticalToast('게이트가 개방되었습니다.', 'check_circle');
+      }
+    }
+
+    function triggerEmergencyModal() {
+      document.getElementById('e-stop-modal').classList.remove('hidden');
+    }
+
+    function closeEmergencyModal() {
+      document.getElementById('e-stop-modal').classList.add('hidden');
+    }
+
+    function confirmEmergencyStop() {
+      closeEmergencyModal();
+      showTacticalToast('전 차량 긴급 비상 제동(E-STOP)이 실행되었습니다.', 'warning');
+    }
+
+    function triggerFireSuppression() {
+      const targetEl = document.getElementById('fire-target-veh');
+      if (targetEl) {
+        targetEl.innerText = `${currentDiagVehicleId} (${fleetDatabase[currentDiagVehicleId]?.typeName || ''})`;
+      }
+      document.getElementById('fire-suppression-modal').classList.remove('hidden');
+    }
+
+    function closeFireSuppressionModal() {
+      document.getElementById('fire-suppression-modal').classList.add('hidden');
+    }
+
+    function confirmFireSuppression() {
+      closeFireSuppressionModal();
+      const v = fleetDatabase[currentDiagVehicleId];
+      if (v) {
+        v.status = '화재 진압 작동 (고전압 차단)';
+        v.speed = '0 km/h';
+        v.speedNum = 0;
+        v.battery.temp = '진압 중 (수냉 분사)';
+      }
+      selectDiagnosticVehicle(currentDiagVehicleId, false);
+      showTacticalToast(`[${currentDiagVehicleId}] 비상 화재 진압 및 고전압 배터리 차단 명령이 전송되었습니다.`, 'local_fire_department');
+    }
+  </script>
+</body>
+</html>
